@@ -33,9 +33,9 @@ MODELS = {
     "requirements": (SONNET, G + "gemini-3.5-flash-lite", G + "gemini-3.1-flash-lite", FALLBACK, G + "gemini-3.6-flash"),
     # Code-writing roles (design also runs Stage 3; tester). They never use a reviewer model.
     "design":       (SONNET, G + "gemini-3.5-flash", G + "gemini-3.8-flash", G + "gemini-3-flash-preview", FALLBACK,
-                     G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite"),
+                     G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite", G + "gemini-3.7-flash", G + "gemma-4-26b-a4b-it"),
     "tester":       (SONNET, G + "gemini-3-flash-preview", G + "gemini-3.6-flash", G + "gemini-3.5-flash", FALLBACK,
-                     G + "gemini-3.8-flash", G + "gemini-3.1-flash-lite"),
+                     G + "gemini-3.8-flash", G + "gemini-3.1-flash-lite", G + "gemini-3.7-flash", G + "gemma-4-26b-a4b-it"),
     "judge":        (HAIKU, G + "gemini-3.8-flash", G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite",
                      G + "gemini-3.5-flash-lite"),
     # Reviewer fallbacks: only models no code-writing role uses (3.5-flash-lite is the requirements agent's).

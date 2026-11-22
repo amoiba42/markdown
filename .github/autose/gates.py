@@ -173,11 +173,20 @@ def scope_violations(changed: list[str], design: dict, managed_tests: set[str]) 
     return bad
 
 
-def g3(ws: Path, base: str, design: dict, managed_tests: set[str]) -> tuple[bool, str]:
+def g3(ws: Path, base: str, design: dict, managed_tests: set[str],
+       existing_tests: dict[str, str] | None = None) -> tuple[bool, str]:
     changed = changed_files(ws, base)
     bad = scope_violations(changed, design, managed_tests)
     if bad:
         return False, "scope guard: " + ", ".join(bad)
+    # The repository's own tests define behaviour that must not change (ADR-007); catch edits here, where the
+    # implementer can still undo them, instead of only at G4.
+    now = file_hashes(ws, [f for f in changed if f in (existing_tests or {})])
+    edited = sorted(f for f, h in now.items() if h != existing_tests[f])
+    if edited:
+        return False, ("existing tests were edited, which is not allowed: " + ", ".join(edited) +
+                       f"\nRestore them with: cd /ws/work && git checkout {base} -- " + " ".join(edited) +
+                       "\nThen change the library code so the original tests still pass.")
     rc, out = sandbox.run(f"rm -rf /tmp/whl && pip wheel -q --no-deps --no-build-isolation -w /tmp/whl . && python -c 'import {IMPORT_NAME}'",
                           cwd=sandbox.ws_path(ws), timeout=600)
     if rc != 0:
@@ -185,7 +194,9 @@ def g3(ws: Path, base: str, design: dict, managed_tests: set[str]) -> tuple[bool
     py = [f for f in changed if f.endswith(".py") and (ws / f).exists()]
     new = new_lint(ws, base, py)
     if new:
-        return False, "ruff found new problems:\n" + "\n".join(new[:30])
+        files = sorted({p.split(":", 1)[0] for p in new if not p.startswith(" ")})
+        return False, ("ruff found new problems:\n" + "\n".join(new[:30]) +
+                       f"\nMany are fixed automatically by: cd /ws/work && ruff check --fix {' '.join(files)}")
     return True, f"build ok, ruff ok, {len(changed)} files in scope"
 
 
