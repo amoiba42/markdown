@@ -6,6 +6,7 @@ Event fields reach this code only through environment variables (ADR-006).
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -20,6 +21,17 @@ RUN_ID = os.environ.get("GITHUB_RUN_ID", "local")
 RUN_URL = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{REPO}/actions/runs/{RUN_ID}"
 BUNDLE = f"autose-issue-{ISSUE}"
 MIRROR_MARK = "<!-- autose-mirror -->"
+STOP_MARK = "<!-- autose-stop -->"
+ASSUMPTIONS_MARK = "<!-- autose-assumptions -->"
+
+# Strings that look like credentials. Anything posted to a public issue or uploaded goes through redact().
+SECRET_PATTERNS = [
+    re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),                              # Google API key
+    re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),                               # OpenAI / OpenRouter style
+    re.compile(r"(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{16,}"),
+    re.compile(r"(?i)((?:api[_-]?key|key|token|secret|password)[\"']?\s*[=:]\s*[\"']?)[A-Za-z0-9._\-]{12,}"),
+]
 
 
 def log(msg: str) -> None:
@@ -90,29 +102,55 @@ def download_latest_bundle() -> bool:
 
 # ---------- Issue comments ----------
 
+def redact(text: str) -> str:
+    """Replace credential-shaped strings, and the values of known secret variables, with [redacted]."""
+    for name in ("GEMINI_API_KEY", "OPENROUTER_API_KEY", "GH_TOKEN", "AUTOSE_PAT"):
+        val = os.environ.get(name, "")
+        if len(val) >= 8:
+            text = text.replace(val, "[redacted]")
+    for pat in SECRET_PATTERNS:
+        text = pat.sub(lambda m: (m.group(1) if m.lastindex else "") + "[redacted]", text)
+    return text
+
+
+def short_error(text: str, limit: int = 400) -> str:
+    """One readable line for a public comment: the provider's message when there is one, never the raw payload."""
+    text = redact(text)
+    m = re.search(r'"message":\s*"((?:[^"\\]|\\.)*)"', text)
+    line = m.group(1).replace("\\n", " ") if m else text.strip().splitlines()[0] if text.strip() else ""
+    line = re.sub(r"\s+", " ", line.split("For more information")[0]).strip()
+    return line[:limit] or "no details"
+
+
 def comment(body: str) -> None:
-    gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments", method="POST", fields={"body": body})
+    gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments", method="POST", fields={"body": redact(body)})
+
+
+def upsert_comment(mark: str, body: str) -> None:
+    """Keep one comment per kind on the issue: edit the one that starts with `mark`, else create it."""
+    body = redact(f"{mark}\n{body}")
+    comments = gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments?per_page=100")
+    mine = [c for c in comments if c["body"].startswith(mark)]
+    if mine:
+        gh_api(f"/repos/{REPO}/issues/comments/{mine[0]['id']}", method="PATCH", fields={"body": body})
+    else:
+        gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments", method="POST", fields={"body": body})
 
 
 def update_mirror(state: dict, note: str = "") -> None:
     """One comment on the issue, edited in place, for humans only. The workflow never reads it."""
     shown = {k: state.get(k) for k in ("current_stage", "last_passed", "target_stage", "review_round",
                                        "done", "status", "branch", "run_ids", "tokens")}
-    body = (f"{MIRROR_MARK}\n**AutoSE status** ({note})\n\n```json\n{json.dumps(shown, indent=2)}\n```\n"
+    body = (f"**AutoSE status** ({note})\n\n```json\n{json.dumps(shown, indent=2)}\n```\n"
             f"Latest run: {RUN_URL}")
-    comments = gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments?per_page=100")
-    mine = [c for c in comments if c["body"].startswith(MIRROR_MARK)]
-    if mine:
-        gh_api(f"/repos/{REPO}/issues/comments/{mine[0]['id']}", method="PATCH", fields={"body": body})
-    else:
-        comment(body)
+    upsert_comment(MIRROR_MARK, body)
 
 
 def write_explanation(stage: str, reason: str, detail: str = "") -> None:
     """Explanation artifact for a stop (ADR-006)."""
     ART.mkdir(parents=True, exist_ok=True)
     (ART / "explanation.md").write_text(
-        f"# Run stopped\n\n- Stage: {stage}\n- Reason: {reason}\n- Run: {RUN_URL}\n\n```\n{detail[-6000:]}\n```\n")
+        redact(f"# Run stopped\n\n- Stage: {stage}\n- Reason: {reason}\n- Run: {RUN_URL}\n\n```\n{detail[-6000:]}\n```\n"))
 
 
 def fail(msg: str) -> None:
