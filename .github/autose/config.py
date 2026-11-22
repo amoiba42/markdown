@@ -30,11 +30,18 @@ OPUS, SONNET, HAIKU = A + "claude-opus-5-5", A + "claude-sonnet-5-5", A + "claud
 FALLBACK = os.environ.get("AUTOSE_FALLBACK_MODEL", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free")
 REVIEW_FALLBACK = os.environ.get("AUTOSE_REVIEW_FALLBACK_MODEL", "openrouter/google/gemma-4-31b-it:free")
 MODELS = {
-    "requirements": (SONNET, G + "gemini-3.5-flash-lite", FALLBACK, G + "gemini-3.6-flash"),
-    "design":       (SONNET, G + "gemini-3.8-flash", FALLBACK, G + "gemini-3.6-flash"),   # also Stage 3
-    "tester":       (SONNET, G + "gemini-3.6-flash", FALLBACK, G + "gemini-3.8-flash"),
-    "judge":        (HAIKU, G + "gemini-3.8-flash", G + "gemini-3.6-flash", G + "gemini-3.5-flash-lite"),
-    "reviewer":     (OPUS, G + "gemini-4-hydrogen", REVIEW_FALLBACK),
+    "requirements": (SONNET, G + "gemini-3.5-flash-lite", G + "gemini-3.1-flash-lite", FALLBACK, G + "gemini-3.6-flash"),
+    # Code-writing roles (design also runs Stage 3; tester). They never use a reviewer model.
+    "design":       (SONNET, G + "gemini-3.5-flash", G + "gemini-3.8-flash", G + "gemini-3-flash-preview", FALLBACK,
+                     G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite"),
+    "tester":       (SONNET, G + "gemini-3-flash-preview", G + "gemini-3.6-flash", G + "gemini-3.5-flash", FALLBACK,
+                     G + "gemini-3.8-flash", G + "gemini-3.1-flash-lite"),
+    "judge":        (HAIKU, G + "gemini-3.8-flash", G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite",
+                     G + "gemini-3.5-flash-lite"),
+    # Reviewer fallbacks: only models no code-writing role uses (3.5-flash-lite is the requirements agent's).
+    "reviewer":     (OPUS, G + "gemini-4-hydrogen", G + "gemma-4-31b-it", REVIEW_FALLBACK,
+                     "openrouter/nvidia/nemotron-3.5-super-vl:free", "openrouter/inclusionai/ling-3.2-flash:free",
+                     G + "gemini-3.5-flash-lite"),
 }
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
 VARIANT = os.environ.get("AUTOSE_VARIANT", "A")
@@ -46,7 +53,7 @@ if VARIANT == "B":
 # ---------- Caps (ADR-006); numbers are TUNE ----------
 MAX_STAGE_REASKS = 1             # ADR-017: re-asks of the same agent after its own check (G1, G2, G6) fails
 STAGE4_TESTER_RETRIES = 1        # ADR-017: Stage 4 failures caused by the tester's own files go back to the tester
-STEP_LIMIT = {"requirements": 25, "design": 45, "implement": 60, "tester": 40, "reviewer": 40}
+STEP_LIMIT = {"requirements": 25, "design": 45, "implement": 90, "tester": 40, "reviewer": 40}
 WALL_SECONDS = {"requirements": 600, "design": 900, "implement": 1500, "tester": 1200, "reviewer": 1200}
 # Token caps bound the free models' loops (each step resends the whole history). Claude Code runs are bounded
 # in dollars by BUDGET_USD instead.  TUNE

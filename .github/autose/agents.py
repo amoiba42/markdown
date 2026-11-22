@@ -54,7 +54,7 @@ def _usage(response: dict) -> int:
 def _wait_for(e: Exception, attempt: int) -> float | None:
     """Seconds to wait before retrying `e`, or None when waiting cannot help (daily quota exhausted)."""
     text = str(e)
-    if re.search(r"PerDay|per day", text):
+    if re.search(r"PerDay|per day|per-day|_daily", text):     # Gemini and OpenRouter daily-limit wording
         return None
     m = re.search(r"retry in ([\d.]+)(ms|s)\b", text) or re.search(r'"retryDelay":\s*"([\d.]+)(s)"', text)
     base = float(m.group(1)) / (1000 if m.group(2) == "ms" else 1) if m else 0.0

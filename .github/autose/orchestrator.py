@@ -454,6 +454,14 @@ def finish_ready(state: dict) -> None:
 # ---------- main ----------
 
 def run(state: dict) -> None:
+    if state.get("stopped_at") == "review" and state.get("released_sha") and state.get("sendback") != "review":
+        # The change was released and passed CI; only the review did not finish (e.g. no model available).
+        log("previous run stopped in review: releasing the same change again for a new review")
+        state["stopped_at"] = None
+        prepare_workspaces(state)
+        ensure_baseline()
+        finish_ready(state)
+        return
     start = state["target_stage"] or state["last_passed"] + 1
     if start > 4:          # stopped at Release (e.g. CI failed): re-check Stage 4 before releasing again
         start = 4

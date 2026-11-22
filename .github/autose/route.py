@@ -21,14 +21,15 @@ RESULTS = {job: os.environ.get(f"RESULT_{job.upper()}", "") for job in ("orchest
 STATUS = {job: os.environ.get(f"STATUS_{job.upper()}", "") for job in ("orchestrator", "release", "review")}
 
 
-def stop_reason() -> str | None:
+def stop_reason() -> tuple[str, str] | tuple[None, None]:
+    """(job that stopped, explanation), or (None, None) when nothing stopped."""
     for job in ("orchestrator", "release", "review"):
         if RESULTS[job] in ("failure", "cancelled"):
-            return f"the {job} job {RESULTS[job]} (crash, timeout or cancellation)"
+            return job, f"the {job} job {RESULTS[job]} (crash, timeout or cancellation)"
         if STATUS[job] == "stop":
             sub = {"orchestrator": ART, "release": ART / "release", "review": ART / "review"}[job]
-            return read(sub / "explanation.md") or f"the {job} job stopped"
-    return None
+            return job, read(sub / "explanation.md") or f"the {job} job stopped"
+    return None, None
 
 
 def main() -> None:
@@ -43,7 +44,8 @@ def main() -> None:
         r = json.loads(rel.read_text())
         state["released_sha"], state["pr"] = r.get("branch_head"), r.get("pr")
 
-    reason = stop_reason()
+    stopped_job, reason = stop_reason()
+    state["stopped_at"] = stopped_job          # a re-run after a review stop goes straight to a new review
     if reason:
         state["status"] = "stopped"
         m = re.search(r"- Stage: (.+)", reason)
