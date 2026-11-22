@@ -33,15 +33,15 @@ MODELS = {
     "requirements": (SONNET, G + "gemini-3.5-flash-lite", G + "gemini-3.1-flash-lite", FALLBACK, G + "gemini-3.6-flash"),
     # Code-writing roles (design also runs Stage 3; tester). They never use a reviewer model.
     "design":       (SONNET, G + "gemini-3.5-flash", G + "gemini-3.8-flash", G + "gemini-3-flash-preview", FALLBACK,
-                     G + "gemini-3.6-flash"),
+                     G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite"),
     "tester":       (SONNET, G + "gemini-3-flash-preview", G + "gemini-3.6-flash", G + "gemini-3.5-flash", FALLBACK,
-                     G + "gemini-3.8-flash"),
+                     G + "gemini-3.8-flash", G + "gemini-3.1-flash-lite"),
     "judge":        (HAIKU, G + "gemini-3.8-flash", G + "gemini-3.6-flash", G + "gemini-3.1-flash-lite",
                      G + "gemini-3.5-flash-lite"),
-    # Reviewer fallbacks: only models no code-writing role uses (flash-lite models are the requirements agent's).
+    # Reviewer fallbacks: only models no code-writing role uses (3.5-flash-lite is the requirements agent's).
     "reviewer":     (OPUS, G + "gemini-4-hydrogen", G + "gemma-4-31b-it", REVIEW_FALLBACK,
                      "openrouter/nvidia/nemotron-3.5-super-vl:free", "openrouter/inclusionai/ling-3.2-flash:free",
-                     G + "gemini-3.5-flash-lite", G + "gemini-3.1-flash-lite"),
+                     G + "gemini-3.5-flash-lite"),
 }
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
 VARIANT = os.environ.get("AUTOSE_VARIANT", "A")
