@@ -185,7 +185,9 @@ def g3(ws: Path, base: str, design: dict, managed_tests: set[str]) -> tuple[bool
     py = [f for f in changed if f.endswith(".py") and (ws / f).exists()]
     new = new_lint(ws, base, py)
     if new:
-        return False, "ruff found new problems:\n" + "\n".join(new[:30])
+        files = sorted({p.split(":", 1)[0] for p in new if not p.startswith(" ")})
+        return False, ("ruff found new problems:\n" + "\n".join(new[:30]) +
+                       f"\nMany are fixed automatically by: cd /ws/work && ruff check --fix {' '.join(files)}")
     return True, f"build ok, ruff ok, {len(changed)} files in scope"
 
 
