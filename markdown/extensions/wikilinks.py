@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from . import Extension
 from ..inlinepatterns import InlineProcessor
+from ..util import AtomicString
 import xml.etree.ElementTree as etree
 import re
 from typing import Any
@@ -59,7 +60,7 @@ class WikiLinkExtension(Extension):
         self.md = md
 
         # append to end of inline patterns
-        WIKILINK_RE = r'\[\[([\w0-9_ -]+)\]\]'
+        WIKILINK_RE = r'\[\[([\w0-9_ -]+)(?:\|([\w0-9_ -]+))?\]\]'
         wikilinkPattern = WikiLinksInlineProcessor(WIKILINK_RE, self.getConfigs())
         wikilinkPattern.md = md
         md.inlinePatterns.register(wikilinkPattern, 'wikilink', 75)
@@ -73,12 +74,16 @@ class WikiLinksInlineProcessor(InlineProcessor):
         self.config = config
 
     def handleMatch(self, m: re.Match[str], data: str) -> tuple[etree.Element | str, int, int]:
-        if m.group(1).strip():
+        target = m.group(1).strip()
+        if target:
             base_url, end_url, html_class = self._getMeta()
-            label = m.group(1).strip()
-            url = self.config['build_url'](label, base_url, end_url)
+            has_custom_label = m.group(2) is not None
+            label = m.group(2).strip() if has_custom_label else target
+            url = self.config['build_url'](target, base_url, end_url)
             a = etree.Element('a')
-            a.text = label
+            # Use AtomicString for custom labels to prevent further markdown processing
+            # Plain wikilinks continue to allow markdown processing in the link text
+            a.text = AtomicString(label) if has_custom_label else label
             a.set('href', url)
             if html_class:
                 a.set('class', html_class)
