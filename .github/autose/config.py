@@ -46,7 +46,7 @@ if VARIANT == "B":
 # ---------- Caps (ADR-006); numbers are TUNE ----------
 MAX_STAGE_REASKS = 1             # ADR-017: re-asks of the same agent after its own check (G1, G2, G6) fails
 STAGE4_TESTER_RETRIES = 1        # ADR-017: Stage 4 failures caused by the tester's own files go back to the tester
-STEP_LIMIT = {"requirements": 25, "design": 45, "implement": 60, "tester": 40, "reviewer": 40}
+STEP_LIMIT = {"requirements": 25, "design": 45, "implement": 90, "tester": 40, "reviewer": 40}
 WALL_SECONDS = {"requirements": 600, "design": 900, "implement": 1500, "tester": 1200, "reviewer": 1200}
 # Token caps bound the free models' loops (each step resends the whole history). Claude Code runs are bounded
 # in dollars by BUDGET_USD instead.  TUNE
