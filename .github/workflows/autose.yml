@@ -74,6 +74,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}   # extra keys are used in turn (agents.py)
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVENT_NAME: ${{ github.event_name }}
           AUTOSE_CHECKOUT: ${{ github.workspace }}/work
@@ -174,6 +178,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}   # extra keys are used in turn (agents.py)
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR_NUMBER: ${{ needs.release.outputs.pr }}
           AUTOSE_BASE_SHA: ${{ needs.release.outputs.base }}   # where the branch started, not today's master

@@ -9,6 +9,7 @@
 
 import copy
 import json
+import os
 import random
 import re
 import time
@@ -60,14 +61,17 @@ def _wait_for(e: Exception, attempt: int) -> float | None:
     return min(MAX_WAIT, base) * random.uniform(1.0, 1.5)   # jitter so parallel runs drift apart
 
 
-def _retry(call, on_wait=None):
+def _retry(call, on_wait=None, fast_429=False):
     """Run call(); on a transient error wait (server hint, exponential, jitter) and retry. Re-raise at once on a
     daily quota, or after RETRIES retries, so the caller can switch to the fallback model.
+    `fast_429`: re-raise any rate limit at once, because another API key for the same model is next.
     `on_wait(seconds)` is told about every wait, so the caller can keep it out of its wall-clock cap."""
     for attempt in range(RETRIES):
         try:
             return call()
         except TRANSIENT as e:
+            if fast_429 and isinstance(e, litellm.exceptions.RateLimitError):
+                raise
             wait = _wait_for(e, attempt)
             if wait is None:
                 log(f"{type(e).__name__}: daily quota; not retrying")
@@ -79,16 +83,48 @@ def _retry(call, on_wait=None):
     return call()
 
 
-def model_kwargs(model: str) -> dict:
-    return {"max_tokens": MAX_TOKENS} if model.startswith("anthropic/") else {}
+# Several Gemini keys (repository secrets GEMINI_API_KEY, GEMINI_API_KEY_2 ... GEMINI_API_KEY_9) are used in
+# turn. A chain entry ("slot") for a Gemini model with several keys is "<model>#<key index>"; a rejected or
+# rate-limited key moves the call to the next key before the next model.
+GEMINI_KEYS = [v for v in [os.environ.get("GEMINI_API_KEY")] +
+               [os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(2, 10)] if v]
 
 
-DEAD: set[str] = set()      # providers that answered with a billing or auth error in this process
-EXHAUSTED: set[str] = set() # models whose daily quota ran out in this process
+def base(slot: str) -> str:
+    """Model name of a chain slot, without the key index."""
+    return slot.rsplit("#", 1)[0]
 
 
-def provider(model: str) -> str:
-    return model.split("/", 1)[0]
+def slots(model: str) -> list[str]:
+    if model.startswith("gemini/") and len(GEMINI_KEYS) > 1:
+        return [f"{model}#{i}" for i in range(len(GEMINI_KEYS))]
+    return [model]
+
+
+def model_kwargs(slot: str) -> dict:
+    if slot.startswith("anthropic/"):
+        return {"max_tokens": MAX_TOKENS}
+    if "#" in slot:
+        return {"api_key": GEMINI_KEYS[int(slot.rsplit("#", 1)[1])]}
+    return {}
+
+
+DEAD: set[str] = set()      # providers (or one Gemini key) that answered with a billing or auth error
+EXHAUSTED: set[str] = set() # slots whose daily quota ran out in this process
+
+
+def provider(slot: str) -> str:
+    """'anthropic', 'openrouter', 'gemini', or 'gemini#2' for one key of several."""
+    name = slot.split("/", 1)[0]
+    return name + "#" + slot.rsplit("#", 1)[1] if "#" in slot else name
+
+
+def usable(slot: str) -> bool:
+    return provider(slot) not in DEAD and slot not in EXHAUSTED
+
+
+def next_slots(seq: list[str], slot: str) -> list[str]:
+    return [m for m in seq[seq.index(slot) + 1:] if usable(m)]
 
 
 def provider_dead(e: Exception) -> bool:
@@ -113,8 +149,10 @@ def mark_unusable(model: str, e: Exception) -> None:
 
 
 def chain(role: str, avoid: str | None = None) -> list[str]:
-    usable = [m for m in MODELS[role] if provider(m) not in DEAD and m not in EXHAUSTED and m != avoid]
-    return usable or [m for m in MODELS[role] if m != avoid] or list(MODELS[role])
+    """The role's models in order, each Gemini model expanded into one slot per key, unusable ones dropped."""
+    models = [m for m in MODELS[role] if m != avoid] or list(MODELS[role])
+    expanded = [s for m in models for s in slots(m)]
+    return [s for s in expanded if usable(s)] or expanded
 
 
 def claude_usable() -> bool:
@@ -139,16 +177,17 @@ class CappedModel(LitellmModel):
 
     def __init__(self, role: str, **kwargs):
         self.chain = chain(role)
-        super().__init__(model_name=self.chain[0], cost_tracking="ignore_errors", **kwargs)
+        super().__init__(model_name=base(self.chain[0]), cost_tracking="ignore_errors", **kwargs)
         self.tokens = 0
         self.agent = None                       # set by Agent; waits are kept out of its wall-clock cap
         self._use(self.chain[0])
 
-    def _use(self, model: str) -> None:
-        """Switch model; prompt-cache markers and max_tokens only for Claude models."""
-        self.config.model_name = model
-        self.config.model_kwargs = model_kwargs(model)
-        self.config.set_cache_control = "default_end" if model.startswith("anthropic/") else None
+    def _use(self, slot: str) -> None:
+        """Switch model (and key); prompt-cache markers and max_tokens only for Claude models."""
+        self.slot = slot
+        self.config.model_name = base(slot)
+        self.config.model_kwargs = model_kwargs(slot)
+        self.config.set_cache_control = "default_end" if slot.startswith("anthropic/") else None
 
     def _waited(self, seconds: float) -> None:
         if self.agent is not None:
@@ -156,23 +195,24 @@ class CappedModel(LitellmModel):
 
     def _query(self, messages, **kwargs):
         while True:
-            model = self.config.model_name
+            slot = self.slot
             msgs = messages
-            if not model.startswith("anthropic/"):
+            if not slot.startswith("anthropic/"):
                 msgs = copy.deepcopy(messages)
                 for m in msgs:
                     _clear_cache_control(m)     # Claude prompt-cache markers mean nothing to other providers
+            rest = next_slots(self.chain, slot)
+            same_model_next = bool(rest) and base(rest[0]) == base(slot)
             try:
-                return _retry(lambda: LitellmModel._query(self, msgs, **kwargs), self._waited)
+                return _retry(lambda: LitellmModel._query(self, msgs, **kwargs), self._waited, same_model_next)
             except Exception as e:
                 if not switchable(e):
                     raise
-                mark_unusable(model, e)
-                rest = [m for m in self.chain[self.chain.index(model) + 1:]
-                        if provider(m) not in DEAD and m not in EXHAUSTED]
+                mark_unusable(slot, e)
+                rest = next_slots(self.chain, slot)
                 if not rest:
                     raise
-                log(f"{type(e).__name__} on {model}; switching to {rest[0]}")
+                log(f"{type(e).__name__} on {slot}; switching to {rest[0]}")
                 self._use(rest[0])
 
     def query(self, messages, **kwargs):
@@ -275,23 +315,24 @@ def llm_json(role: str, system: str, user: str, avoid_model: str | None = None) 
     Walks the role's model chain on rate limits and unusable providers."""
     models = chain(role, avoid_model)
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    tokens, model = 0, models[0]
+    tokens, slot = 0, models[0]
 
     def call():
-        nonlocal model
+        nonlocal slot
         while True:
+            rest = next_slots(models, slot)
             try:
-                return _retry(lambda: litellm.completion(model=model, messages=msgs, **model_kwargs(model)))
+                return _retry(lambda: litellm.completion(model=base(slot), messages=msgs, **model_kwargs(slot)),
+                              fast_429=bool(rest) and base(rest[0]) == base(slot))
             except Exception as e:
                 if not switchable(e):
                     raise
-                mark_unusable(model, e)
-                rest = [m for m in models[models.index(model) + 1:]
-                        if provider(m) not in DEAD and m not in EXHAUSTED]
+                mark_unusable(slot, e)
+                rest = next_slots(models, slot)
                 if not rest:
                     raise
-                log(f"{type(e).__name__} on {model}; switching to {rest[0]}")
-                model = rest[0]
+                log(f"{type(e).__name__} on {slot}; switching to {rest[0]}")
+                slot = rest[0]
 
     for attempt in range(2):
         resp = call()
@@ -300,7 +341,7 @@ def llm_json(role: str, system: str, user: str, avoid_model: str | None = None) 
         try:
             data = json.loads(text.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
             RUN_TOKENS["total"] += tokens
-            return data, tokens, model
+            return data, tokens, base(slot)
         except json.JSONDecodeError:
             msgs += [{"role": "assistant", "content": text},
                      {"role": "user", "content": "That was not valid JSON. Reply with the JSON only."}]

@@ -105,7 +105,8 @@ def download_latest_bundle() -> bool:
 
 def redact(text: str) -> str:
     """Replace credential-shaped strings, and the values of known secret variables, with [redacted]."""
-    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "GH_TOKEN", "AUTOSE_PAT"):
+    names = ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "GH_TOKEN", "AUTOSE_PAT"]
+    for name in names + [f"GEMINI_API_KEY_{i}" for i in range(2, 10)]:
         val = os.environ.get(name, "")
         if len(val) >= 8:
             text = text.replace(val, "[redacted]")
