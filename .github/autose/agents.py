@@ -3,7 +3,8 @@
 - Bash is the only tool, and every command runs in the sandbox container (sandbox.py).
 - Tool-call and wall-clock caps use mini-swe-agent's step and wall-clock limits.
 - Token caps are counted here from each response's `usage` field (the cost limit stays at $0 on free models).
-- On a rate-limit error, the model falls back once to its same-family fallback; a second 429 stops the stage.
+- On a transient error (429 or 503), the call waits and retries with backoff on the same model, then falls back
+  once to the same-family fallback and retries again; only then does the stage stop.
 """
 
 import json
@@ -21,6 +22,8 @@ from common import log
 from config import MODELS, RUN_TOKEN_CAP, STAGE_TOKEN_CAP, STEP_LIMIT, WALL_SECONDS
 
 RUN_TOKENS = {"total": 0}
+TRANSIENT = (litellm.exceptions.RateLimitError, litellm.exceptions.ServiceUnavailableError)
+BACKOFF = (15, 30, 60)          # seconds between attempts; free tier allows about 5 requests per minute
 FINISH = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
 SYSTEM_FOOTER = f"""
@@ -38,8 +41,19 @@ def _usage(response: dict) -> int:
     return int(u.get("prompt_tokens") or 0) + int(u.get("completion_tokens") or 0)
 
 
+def _retry(call):
+    """Run call(); on a transient error wait and retry, up to len(BACKOFF) retries, then re-raise."""
+    for wait in BACKOFF:
+        try:
+            return call()
+        except TRANSIENT as e:
+            log(f"{type(e).__name__}; retrying in {wait}s")
+            time.sleep(wait)
+    return call()
+
+
 class CappedModel(LitellmModel):
-    abort_exceptions = LitellmModel.abort_exceptions + [litellm.exceptions.RateLimitError]
+    abort_exceptions = LitellmModel.abort_exceptions + list(TRANSIENT)
 
     def __init__(self, role: str, **kwargs):
         primary, fallback = MODELS[role]
@@ -48,13 +62,13 @@ class CappedModel(LitellmModel):
 
     def _query(self, messages, **kwargs):
         try:
-            return super()._query(messages, **kwargs)
-        except litellm.exceptions.RateLimitError:
+            return _retry(lambda: super(CappedModel, self)._query(messages, **kwargs))
+        except TRANSIENT:
             if self.switched or self.fallback == self.config.model_name:
                 raise
-            log(f"429 on {self.config.model_name}; falling back once to {self.fallback}")
+            log(f"transient error on {self.config.model_name}; falling back once to {self.fallback}")
             self.switched, self.config.model_name = True, self.fallback
-            return super()._query(messages, **kwargs)
+            return _retry(lambda: super(CappedModel, self)._query(messages, **kwargs))
 
     def query(self, messages, **kwargs):
         if self.tokens >= STAGE_TOKEN_CAP or RUN_TOKENS["total"] >= RUN_TOKEN_CAP:
@@ -158,12 +172,12 @@ def llm_json(role: str, system: str, user: str, avoid_model: str | None = None) 
     tokens, model, switched = 0, models[0], False
     for attempt in range(2):
         try:
-            resp = litellm.completion(model=model, messages=msgs)
-        except litellm.exceptions.RateLimitError:
+            resp = _retry(lambda: litellm.completion(model=model, messages=msgs))
+        except TRANSIENT:
             if switched or len(models) < 2:
                 raise
             switched, model = True, models[1]
-            resp = litellm.completion(model=model, messages=msgs)
+            resp = _retry(lambda: litellm.completion(model=model, messages=msgs))
         tokens += _usage(resp.model_dump())
         text = resp.choices[0].message.content or ""
         try:
