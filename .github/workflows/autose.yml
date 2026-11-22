@@ -205,10 +205,12 @@ jobs:
         uses: actions/download-artifact@v4
         with: { name: "autose-issue-${{ env.ISSUE_NUMBER }}", path: "${{ runner.temp }}/autose/art" }
       - name: Download release outputs
+        if: always() && needs.release.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with: { name: "autose-release-${{ env.ISSUE_NUMBER }}", path: "${{ runner.temp }}/autose/art/release" }
       - name: Download review outputs
+        if: always() && needs.review.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with: { name: "autose-review-${{ env.ISSUE_NUMBER }}", path: "${{ runner.temp }}/autose/art/review" }
