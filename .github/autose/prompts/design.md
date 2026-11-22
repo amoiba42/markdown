@@ -31,6 +31,10 @@ Rules for targets (checked by a script that parses the files):
 - Include the signature (for an attribute, its value's shape): tests are written from it before your code exists.
 - Tests are not targets; do not list test files.
 
+Existing tests define behaviour that must not change: find the tests that cover the code you will touch
+(`grep -rn` under /ws/work/tests) and choose an approach that keeps every one of them passing. If a general
+change would break them, design a narrower change that handles only the cases in the spec.
+
 Do not change code yet. When design.json is written, write **/ws/out/attempt_summary.md** (at most 200 words:
 the approach and why), then finish.
 
