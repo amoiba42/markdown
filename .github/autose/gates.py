@@ -390,7 +390,8 @@ def file_hashes(root: Path, paths: list[str]) -> dict[str, str]:
     return {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in paths if (root / p).is_file()}
 
 
-def g4(ws: Path, spec: dict, design: dict, baseline_passed: set[str], tester_files: dict[str, str],
+def g4(ws: Path, spec: dict, design: dict, baseline_passed: set[str], baseline_failed: set[str],
+       tester_files: dict[str, str],
        existing_test_hashes: dict[str, str], changed: list[str]) -> tuple[bool, str, dict]:
     report = {}
     conftests = [f for f in changed if f.endswith("conftest.py")]
@@ -412,6 +413,10 @@ def g4(ws: Path, spec: dict, design: dict, baseline_passed: set[str], tester_fil
     # line of each error, not the test source.
     failing = "\n".join(f"- {t}: {m}" for t, m in list(errors.items())[:15]) or "- (no error text captured)"
     lost = sorted(t for t in baseline_passed if t not in passed)
+    new_failures = sorted(failed - baseline_failed)     # all new and existing tests must pass (brief, Stage 4)
+    if new_failures and not lost:
+        return False, (f"tests fail that did not fail at the base commit: {new_failures[:20]}\n"
+                       f"Failing tests and their first error line:\n{failing}"), report
     if lost:
         return False, (f"tests passing in baseline now fail or are missing: {lost[:20]}\n"
                        f"Failing tests and their first error line:\n{failing}"), report

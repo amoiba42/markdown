@@ -65,8 +65,15 @@ def push(state: dict, patch: Path) -> str:
     git("checkout", "-q", "-B", branch, state["branch_head"])
     if patch.stat().st_size:
         git("apply", "--index", "--binary", str(patch))
-    git("-c", "user.name=autose-bot", "-c", "user.email=autose-bot@users.noreply.github.com",
-        "commit", "-q", "--allow-empty", "-m", f"autose: issue #{ISSUE}, round {state['review_round'] + 1}")
+    bot = ("-c", "user.name=autose-bot", "-c", "user.email=autose-bot@users.noreply.github.com")
+    git(*bot, "commit", "-q", "--allow-empty", "-m", f"autose: issue #{ISSUE}, round {state['review_round'] + 1}")
+    # Bring the branch up to date with the base branch, so CI on a push runs the current workflow files and the
+    # pull request shows only AutoSE's change. A conflict stops the release (nothing is forced).
+    res = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *bot, "merge", "-q", "--no-edit",
+                          f"origin/{BASE_REF}"], cwd=CHECKOUT, text=True, capture_output=True)
+    if res.returncode:
+        git("merge", "--abort", check=False)
+        raise Stop(f"merging {BASE_REF} into {branch} failed: {res.stdout[-800:]}{res.stderr[-800:]}")
     # The auth header is never part of an error message: only the return code and git's stderr are kept.
     res = subprocess.run(["git", "-c", header, "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
                          cwd=CHECKOUT, capture_output=True, text=True)

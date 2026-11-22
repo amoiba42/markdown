@@ -372,7 +372,7 @@ def stage4(state: dict, note: str, baseline: dict) -> tuple[bool, str, str]:
     # G4 on a copy with the implementation and the frozen tests.
     g4ws = copy_ws(WS / "work", WS / "g4")
     write_files(g4ws, phase2)
-    ok, msg, report = gates.g4(g4ws, spec, design, set(baseline["passed"]), phase2,
+    ok, msg, report = gates.g4(g4ws, spec, design, set(baseline["passed"]), set(baseline["failed"]), phase2,
                                baseline["test_hashes"], gates.changed_files(g4ws, state["branch_head"]))
     (ART / "test_report.md").write_text(f"# Test report\n\nResult: {'PASS' if ok else 'FAIL'}: {msg}\n\n"
                                         f"```json\n{json.dumps(report, indent=2)}\n```\n")
@@ -455,6 +455,8 @@ def finish_ready(state: dict) -> None:
 
 def run(state: dict) -> None:
     start = state["target_stage"] or state["last_passed"] + 1
+    if start > 4:          # stopped at Release (e.g. CI failed): re-check Stage 4 before releasing again
+        start = 4
     note = review_note(start) if state.get("sendback") == "review" else ""
     state["sendback"] = None
     prepare_workspaces(state)
