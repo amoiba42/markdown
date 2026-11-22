@@ -13,7 +13,7 @@ import sys
 
 from common import (ART, ISSUE, REPO, RUN_URL, comment, download_latest_bundle, gh_api, load_state, log,
                     read, save_state, update_mirror)
-from config import MAX_REVIEW_ROUNDS
+from config import BASE_REF, MAX_REVIEW_ROUNDS
 
 STAGE_OF = {"spec": 1, "design": 2, "code": 3, "test": 4}
 RESULTS = {job: os.environ.get(f"RESULT_{job.upper()}", "") for job in ("orchestrator", "release", "review")}
@@ -62,7 +62,7 @@ def main() -> None:
             state.update(target_stage=target, last_passed=target - 1, sendback="review", status="re-entry")
             save_state(state)
             gh_api(f"/repos/{REPO}/actions/workflows/autose.yml/dispatches", method="POST",
-                   fields={"ref": "main", "inputs": {"issue": str(ISSUE)}})
+                   fields={"ref": BASE_REF, "inputs": {"issue": str(ISSUE)}})
             log(f"re-entry dispatched at stage {target}")
     save_state(state)
     try:

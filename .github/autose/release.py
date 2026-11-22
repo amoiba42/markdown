@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from common import ART, ISSUE, REPO, RUN_URL, gh_api, load_state, log, set_output, write_explanation
-from config import CI_POLL_SECONDS
+from config import BASE_REF, CI_POLL_SECONDS
 
 CHECKOUT = Path(os.environ.get("AUTOSE_CHECKOUT", "work"))
 SECRET_PATTERNS = {
@@ -81,7 +81,7 @@ def open_pr(state: dict, changed: list[str]) -> int:
     if prs:
         return prs[0]["number"]
     pr = gh_api(f"/repos/{REPO}/pulls", method="POST", token_env="AUTOSE_PAT",
-                fields={"title": f"AutoSE: issue #{ISSUE}", "head": state["branch"], "base": "main", "body": body})
+                fields={"title": f"AutoSE: issue #{ISSUE}", "head": state["branch"], "base": BASE_REF, "body": body})
     return pr["number"]
 
 

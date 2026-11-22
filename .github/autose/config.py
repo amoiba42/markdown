@@ -15,7 +15,7 @@ ART = TMP / "art"          # artifacts bundle, never mounted into the sandbox
 SANDBOX_WS = "/ws"         # path of WS inside the sandbox container
 
 # ---------- Base commit of the fork (Python-Markdown) ----------
-BASE_REF = os.environ.get("AUTOSE_BASE_REF", "main")
+BASE_REF = os.environ.get("AUTOSE_BASE_REF", "master")
 
 # ---------- Models (ADR-011) ----------
 # Each role: primary model and one same-family fallback that keeps both splits:

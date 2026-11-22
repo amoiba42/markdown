@@ -34,6 +34,7 @@ env:
   AUTOSE_TOOL: tool/.github/autose
   AUTOSE_VARIANT: ${{ vars.AUTOSE_VARIANT || 'A' }}
   AUTOSE_RETRIES: ${{ vars.AUTOSE_RETRIES || '2' }}
+  AUTOSE_BASE_REF: master
   PYTHON_VERSION: "3.12"
 
 jobs:
