@@ -465,8 +465,10 @@ def run(state: dict) -> None:
     start = state["target_stage"] or state["last_passed"] + 1
     if start > 4:          # stopped at Release (e.g. CI failed): re-check Stage 4 before releasing again
         start = 4
-    note = review_note(start) if state.get("sendback") == "review" else ""
-    state["sendback"] = None
+    # The review findings stay in state until the stage they were sent to passes, so a re-run after a stop
+    # in between still gets them.
+    from_review = state.get("sendback") == "review" or (state.get("target_stage") and (ART / "review.json").exists())
+    note = review_note(start) if from_review else ""
     prepare_workspaces(state)
     baseline = ensure_baseline()
     # Retry counters are per run: a maintainer's re-trigger after a stop starts with fresh retries.
@@ -507,6 +509,7 @@ def run(state: dict) -> None:
                 state["retries"] = {"stage3": r3_g3 + r3_g4, "stage2": r2}
                 continue
         state["last_passed"], note = stage, ""
+        state["sendback"] = state["target_stage"] = None
         stage += 1
     state["retries"] = {"stage3": r3_g3 + r3_g4, "stage2": r2}
     finish_ready(state)
