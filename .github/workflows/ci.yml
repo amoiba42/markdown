@@ -16,4 +16,6 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -q pytest pyyaml && pip install -q -e .
-      - run: python -m pytest -q
+      # --continue-on-collection-errors: upstream has one class (tests/test_syntax/extensions/test_md_in_html.py::TestSuite)
+      # that pytest refuses to collect. The same flag is used by the G4 gate and the baseline, so CI matches them.
+      - run: python -m pytest -q --continue-on-collection-errors
