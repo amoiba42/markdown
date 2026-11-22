@@ -21,11 +21,15 @@ BASE_REF = os.environ.get("AUTOSE_BASE_REF", "master")
 # Each role: primary model and one same-family fallback that keeps both splits:
 # no code-writing agent uses the reviewer's model; the judge never uses the requirements model.
 G = "gemini/"
+# ADR-015: the fallback is a model from another provider (OpenRouter), so a Gemini quota stop does not end the run.
+# The reviewer keeps a Gemini fallback: the code-writing roles can fall back to FALLBACK, and the reviewer
+# must never share a model with them. The judge avoids the requirements model at call time (agents.llm_json).
+FALLBACK = os.environ.get("AUTOSE_FALLBACK_MODEL", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free")
 MODELS = {
-    "requirements": (G + "gemini-3.5-flash-lite", G + "gemini-3.6-flash"),
-    "design":       (G + "gemini-3.8-flash", G + "gemini-3.6-flash"),
-    "tester":       (G + "gemini-3.6-flash", G + "gemini-3.8-flash"),
-    "judge":        (G + "gemini-3.8-flash", G + "gemini-3.6-flash"),
+    "requirements": (G + "gemini-3.5-flash-lite", FALLBACK),
+    "design":       (G + "gemini-3.8-flash", FALLBACK),
+    "tester":       (G + "gemini-3.6-flash", FALLBACK),
+    "judge":        (G + "gemini-3.8-flash", FALLBACK),
     "reviewer":     (G + "gemini-4-hydrogen", G + "gemini-3.5-flash-lite"),
 }
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
