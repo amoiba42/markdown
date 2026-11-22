@@ -8,11 +8,12 @@ Reads the job results, the review verdict and the review round, then:
 
 import json
 import os
+import re
 import shutil
 import sys
 
 from common import (ART, ISSUE, REPO, RUN_URL, comment, download_latest_bundle, gh_api, load_state, log,
-                    read, save_state, update_mirror)
+                    read, save_state, short_error, STOP_MARK, update_mirror, upsert_comment)
 from config import BASE_REF, MAX_REVIEW_ROUNDS
 
 STAGE_OF = {"spec": 1, "design": 2, "code": 3, "test": 4}
@@ -45,7 +46,10 @@ def main() -> None:
     reason = stop_reason()
     if reason:
         state["status"] = "stopped"
-        comment(f"**AutoSE stopped.**\n\n{reason[:3000]}\n\nExplanation artifact: {RUN_URL}")
+        m = re.search(r"- Stage: (.+)", reason)
+        where = f" at {m.group(1).strip()}" if m else ""
+        upsert_comment(STOP_MARK, f"**AutoSE stopped{where}.** {short_error(reason)}\n\n"
+                       f"Full explanation (artifact): {RUN_URL}")
     else:
         review = json.loads(read(ART / "review" / "review.json") or "{}")
         verdict = review.get("verdict")
