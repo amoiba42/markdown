@@ -1,0 +1,5 @@
+# Tooling for the AutoSE jobs (runs on the runner, never inside the sandbox).
+# TODO(me): pin exact versions after the first successful run (pip freeze), for reproducibility.
+mini-swe-agent>=2.0
+litellm
+jsonschema>=4
