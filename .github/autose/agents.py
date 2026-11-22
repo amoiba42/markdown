@@ -27,7 +27,8 @@ from config import MODELS, RUN_TOKEN_CAP, STAGE_TOKEN_CAP, STEP_LIMIT, WALL_SECO
 
 RUN_TOKENS = {"total": 0}
 TRANSIENT = (litellm.exceptions.RateLimitError, litellm.exceptions.ServiceUnavailableError,
-             litellm.exceptions.InternalServerError)   # 429, 503, and 500/529 overloaded
+             litellm.exceptions.InternalServerError,   # 429, 503, and 500/529 overloaded
+             litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout)   # dropped or slow connection
 RETRIES = 3                   # retries per call on the same model before the fallback
 MAX_WAIT = 60                 # seconds; longest single wait
 MAX_TOKENS = 16000            # per response; litellm's default is too small for a thinking model's turn
@@ -82,15 +83,66 @@ def model_kwargs(model: str) -> dict:
     return {"max_tokens": MAX_TOKENS} if model.startswith("anthropic/") else {}
 
 
+DEAD: set[str] = set()      # providers that answered with a billing or auth error in this process
+EXHAUSTED: set[str] = set() # models whose daily quota ran out in this process
+
+
+def provider(model: str) -> str:
+    return model.split("/", 1)[0]
+
+
+def provider_dead(e: Exception) -> bool:
+    """A provider that cannot serve this run at all: bad key, no access, or no credit."""
+    text = str(e).lower()
+    if isinstance(e, TRANSIENT):                 # rate limits mention "billing details"; they are not fatal
+        return False
+    return isinstance(e, (litellm.exceptions.AuthenticationError, litellm.exceptions.PermissionDeniedError)) \
+        or "credit balance" in text or "insufficient credits" in text or "requires more credits" in text
+
+
+def switchable(e: Exception) -> bool:
+    """Errors after which the next model in the chain should be tried."""
+    return isinstance(e, TRANSIENT) or isinstance(e, litellm.exceptions.NotFoundError) or provider_dead(e)
+
+
+def mark_unusable(model: str, e: Exception) -> None:
+    if provider_dead(e):
+        DEAD.add(provider(model))
+    elif isinstance(e, litellm.exceptions.RateLimitError) and _wait_for(e, 0) is None:
+        EXHAUSTED.add(model)
+
+
+def chain(role: str, avoid: str | None = None) -> list[str]:
+    usable = [m for m in MODELS[role] if provider(m) not in DEAD and m not in EXHAUSTED and m != avoid]
+    return usable or [m for m in MODELS[role] if m != avoid] or list(MODELS[role])
+
+
+def claude_usable() -> bool:
+    """One tiny request to see whether the Anthropic key works (credit, auth). Cached per process."""
+    if "anthropic" in DEAD:
+        return False
+    if getattr(claude_usable, "ok", None) is not None:
+        return claude_usable.ok
+    try:
+        litellm.completion(model=MODELS["judge"][0], max_tokens=1, messages=[{"role": "user", "content": "ok"}])
+        claude_usable.ok = True
+    except Exception as e:
+        claude_usable.ok = not provider_dead(e)
+        if not claude_usable.ok:
+            DEAD.add("anthropic")
+            log(f"Anthropic API unusable, using the other models: {str(e)[:200]}")
+    return claude_usable.ok
+
+
 class CappedModel(LitellmModel):
-    abort_exceptions = LitellmModel.abort_exceptions + list(TRANSIENT)
+    abort_exceptions = LitellmModel.abort_exceptions + list(TRANSIENT) + [litellm.exceptions.BadRequestError]
 
     def __init__(self, role: str, **kwargs):
-        primary, fallback = MODELS[role]
-        super().__init__(model_name=primary, cost_tracking="ignore_errors", **kwargs)
-        self.fallback, self.switched, self.tokens = fallback, False, 0
+        self.chain = chain(role)
+        super().__init__(model_name=self.chain[0], cost_tracking="ignore_errors", **kwargs)
+        self.tokens = 0
         self.agent = None                       # set by Agent; waits are kept out of its wall-clock cap
-        self._use(primary)
+        self._use(self.chain[0])
 
     def _use(self, model: str) -> None:
         """Switch model; prompt-cache markers and max_tokens only for Claude models."""
@@ -103,19 +155,25 @@ class CappedModel(LitellmModel):
             self.agent._start_time += seconds
 
     def _query(self, messages, **kwargs):
-        call = lambda: super(CappedModel, self)._query(messages, **kwargs)
-        try:
-            return _retry(call, self._waited)
-        except TRANSIENT:
-            if self.switched or self.fallback == self.config.model_name:
-                raise
-            log(f"transient error on {self.config.model_name}; falling back once to {self.fallback}")
-            self.switched = True
-            self._use(self.fallback)
-            plain = copy.deepcopy(messages)
-            for m in plain:
-                _clear_cache_control(m)         # Claude prompt-cache markers mean nothing to other providers
-            return _retry(lambda: super(CappedModel, self)._query(plain, **kwargs), self._waited)
+        while True:
+            model = self.config.model_name
+            msgs = messages
+            if not model.startswith("anthropic/"):
+                msgs = copy.deepcopy(messages)
+                for m in msgs:
+                    _clear_cache_control(m)     # Claude prompt-cache markers mean nothing to other providers
+            try:
+                return _retry(lambda: LitellmModel._query(self, msgs, **kwargs), self._waited)
+            except Exception as e:
+                if not switchable(e):
+                    raise
+                mark_unusable(model, e)
+                rest = [m for m in self.chain[self.chain.index(model) + 1:]
+                        if provider(m) not in DEAD and m not in EXHAUSTED]
+                if not rest:
+                    raise
+                log(f"{type(e).__name__} on {model}; switching to {rest[0]}")
+                self._use(rest[0])
 
     def query(self, messages, **kwargs):
         if self.tokens >= STAGE_TOKEN_CAP or RUN_TOKENS["total"] >= RUN_TOKEN_CAP:
@@ -213,19 +271,30 @@ class Agent:
 
 
 def llm_json(role: str, system: str, user: str, avoid_model: str | None = None) -> tuple[dict | list, int, str]:
-    """Single LLM call that must return JSON. One re-ask on a parse error (ADR-006). Returns (data, tokens, model)."""
-    primary, fallback = MODELS[role]
-    models = [m for m in (primary, fallback) if m != avoid_model] or [fallback]
+    """Single LLM call that must return JSON. One re-ask on a parse error (ADR-006). Returns (data, tokens, model).
+    Walks the role's model chain on rate limits and unusable providers."""
+    models = chain(role, avoid_model)
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    tokens, model, switched = 0, models[0], False
+    tokens, model = 0, models[0]
+
+    def call():
+        nonlocal model
+        while True:
+            try:
+                return _retry(lambda: litellm.completion(model=model, messages=msgs, **model_kwargs(model)))
+            except Exception as e:
+                if not switchable(e):
+                    raise
+                mark_unusable(model, e)
+                rest = [m for m in models[models.index(model) + 1:]
+                        if provider(m) not in DEAD and m not in EXHAUSTED]
+                if not rest:
+                    raise
+                log(f"{type(e).__name__} on {model}; switching to {rest[0]}")
+                model = rest[0]
+
     for attempt in range(2):
-        try:
-            resp = _retry(lambda: litellm.completion(model=model, messages=msgs, **model_kwargs(model)))
-        except TRANSIENT:
-            if switched or len(models) < 2:
-                raise
-            switched, model = True, models[1]
-            resp = _retry(lambda: litellm.completion(model=model, messages=msgs, **model_kwargs(model)))
+        resp = call()
         tokens += _usage(resp.model_dump())
         text = resp.choices[0].message.content or ""
         try:

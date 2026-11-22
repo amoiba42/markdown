@@ -136,8 +136,9 @@ class ClaudeCodeAgent:
 
 def make_agent(role: str, cap_key: str, system: str, cwd: str, trajectory: Path):
     """Claude Code for roles on Claude models; mini-swe-agent otherwise (e.g. variant B's Qwen reviewer)."""
-    from agents import Agent
+    from agents import Agent, claude_usable
     from config import HARNESS, MODELS
-    if HARNESS == "claude-code" and MODELS[role][0].startswith("anthropic/") and role in CLAUDE_MODELS:
+    if HARNESS == "claude-code" and role in CLAUDE_MODELS and MODELS[role][0].startswith("anthropic/") \
+            and claude_usable():
         return ClaudeCodeAgent(role, cap_key, system, cwd, trajectory)
     return Agent(role, cap_key, system, cwd, trajectory)

@@ -18,22 +18,23 @@ SANDBOX_WS = "/ws"         # path of WS inside the sandbox container
 BASE_REF = os.environ.get("AUTOSE_BASE_REF", "master")
 
 # ---------- Models (ADR-011, ADR-016) ----------
-# Each role: (primary, fallback). Two splits must hold for every pair:
-# no code-writing agent (design, implement, tester) uses the reviewer's model, and the judge never uses the
-# model the requirements agent ran on (the judge avoids it at call time, agents.llm_json).
-# Primaries are Claude, tiered by how much the role's output matters: the reviewer on Opus, the agents that
-# write the spec, design, code and tests on Sonnet, the testability judge (a yes/no per criterion) on Haiku.
-# Fallbacks come from other providers, so a Claude rate limit does not end the run and no code-writer
-# can fall back onto the reviewer's model.
+# Each role has a chain: the first model, then the models tried in order when one is rate-limited, out of
+# quota or unusable (no credit, bad key). Two splits hold for every chain:
+# no code-writing agent (requirements excepted: design, implement, tester) ever uses a reviewer model, and
+# the judge skips the model the requirements agent ran on (agents.llm_json avoid_model).
+# Claude first, tiered by how much the role's output matters (Opus reviewer, Sonnet writers, Haiku judge);
+# then free Gemini models; then free OpenRouter models. A provider that answers with a billing or auth error
+# is skipped for the rest of the run.
 A, G = "anthropic/", "gemini/"
 OPUS, SONNET, HAIKU = A + "claude-opus-5-5", A + "claude-sonnet-5-5", A + "claude-haiku-5-5"
 FALLBACK = os.environ.get("AUTOSE_FALLBACK_MODEL", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free")
+REVIEW_FALLBACK = os.environ.get("AUTOSE_REVIEW_FALLBACK_MODEL", "openrouter/google/gemma-4-31b-it:free")
 MODELS = {
-    "requirements": (SONNET, HAIKU),
-    "design":       (SONNET, FALLBACK),          # also runs Stage 3 (implementation)
-    "tester":       (SONNET, FALLBACK),
-    "judge":        (HAIKU, G + "gemini-3.8-flash"),
-    "reviewer":     (OPUS, G + "gemini-4-hydrogen"),
+    "requirements": (SONNET, G + "gemini-3.5-flash-lite", FALLBACK, G + "gemini-3.6-flash"),
+    "design":       (SONNET, G + "gemini-3.8-flash", FALLBACK, G + "gemini-3.6-flash"),   # also Stage 3
+    "tester":       (SONNET, G + "gemini-3.6-flash", FALLBACK, G + "gemini-3.8-flash"),
+    "judge":        (HAIKU, G + "gemini-3.8-flash", G + "gemini-3.6-flash", G + "gemini-3.5-flash-lite"),
+    "reviewer":     (OPUS, G + "gemini-4-hydrogen", REVIEW_FALLBACK),
 }
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
 VARIANT = os.environ.get("AUTOSE_VARIANT", "A")
