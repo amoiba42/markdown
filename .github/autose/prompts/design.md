@@ -7,7 +7,9 @@ $issue
 $spec
 ```
 
-The repository is at /ws/work. Read ARCHITECTURE.md and the relevant modules, then write **/ws/out/design.json**:
+The repository is at /ws/work. Read ARCHITECTURE.md and the relevant modules, then write **/ws/out/design.json**.
+Work economically: use `grep -n` to find the code you need and read only those parts; aim to finish in about 15
+commands. The design is a plan, not an implementation.
 
 ```json
 {

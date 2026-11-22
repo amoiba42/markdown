@@ -48,8 +48,10 @@ MAX_STAGE_REASKS = 1             # ADR-017: re-asks of the same agent after its 
 STAGE4_TESTER_RETRIES = 1        # ADR-017: Stage 4 failures caused by the tester's own files go back to the tester
 STEP_LIMIT = {"requirements": 25, "design": 45, "implement": 60, "tester": 40, "reviewer": 40}
 WALL_SECONDS = {"requirements": 600, "design": 900, "implement": 1500, "tester": 1200, "reviewer": 1200}
-STAGE_TOKEN_CAP = 1_500_000      # input + output tokens per agent stage
-RUN_TOKEN_CAP = 6_000_000        # per workflow run
+# Token caps bound the free models' loops (each step resends the whole history). Claude Code runs are bounded
+# in dollars by BUDGET_USD instead.  TUNE
+STAGE_TOKEN_CAP = 3_000_000      # input + output tokens per agent stage
+RUN_TOKEN_CAP = 15_000_000       # per workflow run
 COMMAND_TIMEOUT = 300            # seconds per bash command inside the sandbox
 
 # ---------- Retry caps (ADR-006); experiment 2 overrides via AUTOSE_RETRIES ----------
