@@ -33,6 +33,7 @@ TRANSIENT = (litellm.exceptions.RateLimitError, litellm.exceptions.ServiceUnavai
 RETRIES = 3                   # retries per call on the same model before the fallback
 MAX_WAIT = 60                 # seconds; longest single wait
 MAX_TOKENS = 16000            # per response; litellm's default is too small for a thinking model's turn
+MAX_OUTPUT = 10_000           # characters of one command's output kept in the conversation
 FINISH = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
 SYSTEM_FOOTER = f"""
@@ -232,6 +233,10 @@ class SandboxEnvironment(LocalEnvironment):
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict:
         rc, out = sandbox.run(action.get("command", ""), cwd=cwd or self.config.cwd or sandbox.SANDBOX_WS,
                               timeout=timeout or self.config.timeout)
+        if len(out) > MAX_OUTPUT:      # every output is resent on each later step; keep head and tail only
+            cut = len(out) - MAX_OUTPUT
+            out = (out[:MAX_OUTPUT * 2 // 3] + f"\n[... {cut} characters cut; use grep -n or sed -n to read a part ...]\n"
+                   + out[-MAX_OUTPUT // 3:])
         output = {"output": out, "returncode": rc, "exception_info": ""}
         self._check_finished(output)
         return output
