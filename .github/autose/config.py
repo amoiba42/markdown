@@ -70,4 +70,14 @@ CI_POLL_SECONDS = 600
 
 # ---------- Sandbox (ADR-010: agents and repo code never share the runner's environment) ----------
 SANDBOX_IMAGE = "python:3.12-bookworm"
-SANDBOX_PIP = ["pytest", "pyyaml", "ruff"]
+# setuptools and wheel let the offline sandbox build the package with --no-build-isolation.
+SANDBOX_PIP = ["pytest", "pyyaml", "ruff", "setuptools>=77", "wheel"]
+
+# ---------- Agent harness ----------
+# claude-code: agents on Claude models run as headless Claude Code inside the sandbox, behind the proxy.
+# mini: mini-swe-agent through LiteLLM (also used for any non-Claude model, e.g. variant B's Qwen reviewer).
+HARNESS = os.environ.get("AUTOSE_HARNESS", "claude-code")
+CLAUDE_CODE_VERSION = "2.1.330"
+CLAUDE_TOOLS = "Bash,Read,Write,Edit,Glob,Grep"          # no web tools; the sandbox has no internet anyway
+# Dollar cap per agent invocation (Claude Code --max-budget-usd); a resume gets its own cap.  TUNE
+BUDGET_USD = {"requirements": 1.5, "design": 2.0, "implement": 4.0, "tester": 2.5, "reviewer": 4.0}

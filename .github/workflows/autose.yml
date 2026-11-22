@@ -125,7 +125,7 @@ jobs:
         working-directory: ${{ env.AUTOSE_TOOL }}
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTOSE_PAT: ${{ secrets.AUTOSE_PAT }}
+          AUTOSE_PAT: ${{ secrets.AUTOSE_PAT || secrets.AUTOSAT_PAT }}   # the fork stores it as AUTOSAT_PAT
           AUTOSE_CHECKOUT: ${{ github.workspace }}/work
         run: python release.py
       - name: Upload release outputs

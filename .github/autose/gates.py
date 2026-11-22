@@ -40,7 +40,9 @@ def changed_files(ws: Path, base: str) -> list[str]:
     rc2, untracked = git(ws, "ls-files --others --exclude-standard")
     if rc1 or rc2:
         raise RuntimeError(f"git failed in {ws.name}: {(tracked + untracked)[-500:]}")
-    return sorted({f.strip() for f in (tracked + "\n" + untracked).splitlines() if f.strip()})
+    # .claude/ is Claude Code's own state if it ever writes any into a workspace; never part of a change.
+    return sorted({f.strip() for f in (tracked + "\n" + untracked).splitlines()
+                   if f.strip() and not f.strip().startswith(".claude/")})
 
 
 def is_test_file(path: str) -> bool:
@@ -176,7 +178,7 @@ def g3(ws: Path, base: str, design: dict, managed_tests: set[str]) -> tuple[bool
     bad = scope_violations(changed, design, managed_tests)
     if bad:
         return False, "scope guard: " + ", ".join(bad)
-    rc, out = sandbox.run(f"rm -rf /tmp/whl && pip wheel -q --no-deps -w /tmp/whl . && python -c 'import {IMPORT_NAME}'",
+    rc, out = sandbox.run(f"rm -rf /tmp/whl && pip wheel -q --no-deps --no-build-isolation -w /tmp/whl . && python -c 'import {IMPORT_NAME}'",
                           cwd=sandbox.ws_path(ws), timeout=600)
     if rc != 0:
         return False, "build/import failed:\n" + out[-3000:]
@@ -227,7 +229,7 @@ def run_pytest(ws: Path, junit_name: str, select: str = "") -> tuple[int, set[st
     """Run pytest in the sandbox. Returns (rc, passed ids, failed ids, output)."""
     junit = f"/tmp/{junit_name}.xml"
     # Editable install registers the package's entry points (Python-Markdown loads extensions through them).
-    rc, out = sandbox.run(f"pip install -q --no-deps -e . >/dev/null 2>&1; python -m pytest -q -p no:cacheprovider "
+    rc, out = sandbox.run(f"pip install -q --no-deps --no-build-isolation -e . >/dev/null 2>&1; python -m pytest -q -p no:cacheprovider "
                           f"--continue-on-collection-errors --junitxml={junit} {select}",
                           cwd=sandbox.ws_path(ws), timeout=900)
     _, xml = sandbox.run(f"cat {junit}")

@@ -20,7 +20,7 @@ from string import Template
 import gates
 import sandbox
 import schemas
-from agents import Agent
+from claude_agent import make_agent
 from common import ART, ISSUE, REPO, gh_api, log, set_output, write_explanation
 from config import MAX_STAGE_REASKS, PROMPTS, WS
 
@@ -61,6 +61,7 @@ def main() -> None:
             shutil.rmtree(pr_ws)
         shutil.copytree(PR_CHECKOUT, pr_ws, symlinks=True)
         sandbox.start()
+        sandbox.lockdown()
 
         # 1. Tests run first, in the sandbox, with no secrets (ADR-002).
         _, passed, failed, out = gates.run_pytest(pr_ws, "review")
@@ -75,7 +76,7 @@ def main() -> None:
         task = Template((PROMPTS / "reviewer.md").read_text()).safe_substitute(
             issue=f"<{tag}>\nTITLE: {issue['title']}\n\n{issue['body']}\n</{tag}>", tag=tag,
             diff=f"<{tag}>\n{diff[:60000]}\n</{tag}>", tests=test_summary)
-        agent = Agent("reviewer", "reviewer", (PROMPTS / "reviewer_system.md").read_text(), "/ws/pr",
+        agent = make_agent("reviewer", "reviewer", (PROMPTS / "reviewer_system.md").read_text(), "/ws/pr",
                       ART / "review_trajectory.json")
         result = agent.start(task)
         log(f"reviewer: {result}")

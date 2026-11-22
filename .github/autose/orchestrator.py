@@ -18,7 +18,8 @@ from string import Template
 import gates
 import sandbox
 import schemas
-from agents import RUN_TOKENS, Agent, llm_json
+from agents import RUN_TOKENS, llm_json
+from claude_agent import make_agent
 from common import (ART, ASSUMPTIONS_MARK, DONE_MARK, ISSUE, REPO, RUN_ID, download_latest_bundle, gh_api,
                     load_state, log, new_state, read, save_state, set_output, update_mirror, upsert_comment,
                     write_explanation)
@@ -130,7 +131,7 @@ def copy_ws(src: Path, dst: Path) -> Path:
     return dst
 
 
-def validated(agent: Agent, stage: str, cap: str, out_name: str, schema: dict):
+def validated(agent, stage: str, cap: str, out_name: str, schema: dict):
     """Validate an agent output; one re-ask to the same agent on a schema error (ADR-006)."""
     data, err = schemas.load_and_validate(agent_output(out_name), schema)
     if data is None:
@@ -174,7 +175,7 @@ def stage1(state: dict, note: str) -> None:
         note += f"\n\n### Your previous spec.json\n```json\n{read(ART / 'spec.json')}\n```\n"
     system = read(PROMPTS / "a1_skill.md") + "\n\n" + prompt("requirements_system")
     task = prompt("requirements", issue=untrusted(state), number=str(ISSUE), note=note)
-    agent = Agent("requirements", "requirements", system, "/ws/base", ART / "traj" / "stage1.json")
+    agent = make_agent("requirements", "requirements", system, "/ws/base", ART / "traj" / "stage1.json")
     result = agent.start(task)
     record(state, "stage1", result)
     check_exit("1", result)
@@ -220,10 +221,10 @@ def render_spec(spec: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def stage2(state: dict, note: str) -> Agent:
+def stage2(state: dict, note: str):
     fresh_out()
     spec = read(ART / "spec.json")
-    agent = Agent("design", "design", prompt("design_system"), "/ws/work", ART / "traj" / "stage2_3.json")
+    agent = make_agent("design", "design", prompt("design_system"), "/ws/work", ART / "traj" / "stage2_3.json")
     result = agent.start(prompt("design", issue=untrusted(state), spec=spec, note=note))
     record(state, "stage2", result)
     check_exit("2", result)
@@ -265,7 +266,7 @@ def hide_managed_tests(state: dict) -> None:
             p.unlink()
 
 
-def stage3(state: dict, agent: Agent | None, note: str) -> tuple[bool, str]:
+def stage3(state: dict, agent, note: str) -> tuple[bool, str]:
     fresh_out()
     drop_tester_workspaces()
     hide_managed_tests(state)
@@ -273,7 +274,7 @@ def stage3(state: dict, agent: Agent | None, note: str) -> tuple[bool, str]:
     if agent is None:                              # retry or re-entry: fresh agent, same role
         context = (f"{untrusted(state)}\n\n## Spec (spec.json)\n```json\n{read(ART / 'spec.json')}\n```\n"
                    "The design below was already approved by the Stage 2 check; implement it, do not redesign.")
-        agent = Agent("design", "implement", prompt("design_system"), "/ws/work", ART / "traj" / "stage3.json")
+        agent = make_agent("design", "implement", prompt("design_system"), "/ws/work", ART / "traj" / "stage3.json")
         result = agent.start(prompt("implement", context=context, design=read(ART / "design.json"), note=note))
     else:
         result = agent.resume(prompt("implement", context="", design=read(ART / "design.json"), note=note),
@@ -335,7 +336,7 @@ def stage4(state: dict, note: str, baseline: dict) -> tuple[bool, str, str]:
     # Phase 1: clean commit, issue + ACs + interface list only. The implementation is unreadable.
     t1 = copy_ws(WS / "base", WS / "t1")
     write_files(t1, previous)
-    agent = Agent("tester", "tester", prompt("tester_system"), "/ws/t1", ART / "traj" / "stage4.json")
+    agent = make_agent("tester", "tester", prompt("tester_system"), "/ws/t1", ART / "traj" / "stage4.json")
     with hidden(WS / "work", WS / "base"):
         result = agent.start(prompt("tester_phase1", issue=untrusted(state),
                                     acs=json.dumps(spec["acceptance_criteria"], indent=2),
@@ -351,8 +352,9 @@ def stage4(state: dict, note: str, baseline: dict) -> tuple[bool, str, str]:
     # Phase 2: same agent, copy with the implementation; setup fixes only.
     t2 = copy_ws(WS / "work", WS / "t2")
     write_files(t2, phase1)
-    agent.agent.env.config.cwd = "/ws/t2"
-    with hidden(WS / "work", WS / "base", t1):
+    if hasattr(agent, "agent"):                    # mini-swe-agent: move its shell; Claude Code keeps its
+        agent.agent.env.config.cwd = "/ws/t2"      # session directory and is told to work in /ws/t2
+    with hidden(WS / "work", WS / "base"):
         result = agent.resume(prompt("tester_phase2", files="\n".join(sorted(phase1))), "tester")
     record(state, "stage4", result)
     check_exit("4", result)
@@ -417,6 +419,7 @@ def prepare_workspaces(state: dict) -> None:
     if rc != 0:
         sandbox.run(f"git checkout -q -B {state['branch']}", cwd="/ws/work")
     _, head = sandbox.run("git rev-parse HEAD", cwd="/ws/work")
+    sandbox.lockdown()                             # no internet for anything that follows (agents, tests)
     state["branch_head"] = head.strip()
     if state.get("released_sha") and rc == 0 and state["branch_head"] != state["released_sha"]:
         raise Stop("setup", f"{state['branch']} has commits AutoSE did not make; not overwriting a human's work")
