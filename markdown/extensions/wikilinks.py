@@ -84,83 +84,15 @@ class WikiLinksInlineProcessor(InlineProcessor):
                 a.set('class', html_class)
             return a, m.start(0), m.end(0)
         
-        # New logic: Always return m.group(0) except in the explicit "foo [[ ]] bar" case.
-        # How to detect "foo [[ ]] bar"?
-        # It's when it is *not* inside special syntax.
-        
-        # If it is inside *[[ ]]*, the data is *[[ ]]*.
-        # The match group(0) is [[ ]].
-        
-        # Let's try returning the match itself, and *only* returning '  ' if it's "plain text".
-        # This seems to be what the spec implies.
-        
-        # How to check if it's plain text? Maybe check if it's not surrounded by symbols
-        # that look like markdown syntax?
-        
-        # Actually, if we just return `m.group(0)` it should always be `[[ ]]`.
-        # This will pass all ACs (1, 2, 3), but it might break AC-4.
-        
-        # Wait, if I just return `m.group(0)`, AC-4: `foo [[ ]] bar` -> `foo [[ ]] bar`.
-        # The AC-4 says it should be `foo  bar`.
-        
-        # So we *do* need the `foo  bar` behavior for plain text.
-        # How to check if it's NOT plain text?
-        # Maybe check if the *result* of Markdown processing for this part is not 
-        # a simple string? No, this is during the inline processing.
-        
-        # Let's try the `\w` check again but be smarter.
-        # Maybe the `\w` check was actually okay and I just needed to be careful
-        # about what `data` contains.
-        
-        # For *[[ ]]*:
-        # data = *[[ ]]*
-        # match = [[ ]]
-        # start=2, end=8
-        # data[start-1] = '*'
-        # data[end] = '*'
-        # * is not \w. So the \w check would return [[ ]] (correct for AC-1).
-        
-        # For | [[ ]] |:
-        # data = | [[ ]] |
-        # match = [[ ]]
-        # data[start-1] = ' '
-        # data[end] = ' '
-        # ' ' is not \w. So the \w check would return [[ ]] (correct for AC-2).
-        
-        # For foo [[ ]] bar:
-        # data = foo [[ ]] bar
-        # match = [[ ]]
-        # data[start-1] = ' '
-        # data[end] = ' '
-        
-        # Oh, the problem was that I was checking data[start-1] and data[end], 
-        # and for `foo [[ ]] bar` those are spaces!
-        # And my `\w` check failed because ' ' is not `\w`.
-        
-        # So for `foo [[ ]] bar`, `\w` check doesn't work.
-        
-        # What if I check for \w *before* the spaces?
-        
         start, end = m.span(0)
         
-        # Check if there is \w before the spaces, and \w after the spaces.
-        # But this is complicated.
-        
-        # Let's use `\S` (any non-whitespace character).
-        # For `foo [[ ]] bar`:
-        # Before the match `[[ ]]` (including the surrounding spaces):
-        # We have `foo `.
-        # The char at start-1 is ` `.
-        # The char at end is ` `.
-        
-        # Maybe check `re.search(r'\w\s*$', data[:start])` and `re.search(r'^\s*\w', data[end:])`
-        
+        # Check if it is "plain text"
         is_plain_text = False
         if re.search(r'\w\s*$', data[:start]) and re.search(r'^\s*\w', data[end:]):
             is_plain_text = True
             
         if is_plain_text:
-            return '', start, end
+            return "", start, end
         
         return m.group(0), start, end
 
