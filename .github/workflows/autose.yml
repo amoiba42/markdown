@@ -57,12 +57,12 @@ jobs:
     outputs:
       status: ${{ steps.orch.outputs.status }}
     steps:
-      - name: Checkout tooling (trusted, main)
+      - name: Checkout tooling (trusted, master)
         uses: actions/checkout@v4
-        with: { path: tool, persist-credentials: false }
+        with: { ref: "${{ env.AUTOSE_BASE_REF }}", path: tool, persist-credentials: false }
       - name: Checkout fork for agents (base commit)
         uses: actions/checkout@v4
-        with: { path: work, persist-credentials: false }
+        with: { ref: "${{ env.AUTOSE_BASE_REF }}", path: work, persist-credentials: false }
       - uses: actions/setup-python@v5
         with: { python-version: "${{ env.PYTHON_VERSION }}" }
       - name: Install tooling
@@ -108,9 +108,9 @@ jobs:
       pr: ${{ steps.rel.outputs.pr }}
     steps:
       - uses: actions/checkout@v4
-        with: { path: tool, persist-credentials: false }
+        with: { ref: "${{ env.AUTOSE_BASE_REF }}", path: tool, persist-credentials: false }
       - uses: actions/checkout@v4
-        with: { path: work, persist-credentials: false, fetch-depth: 0 }
+        with: { ref: "${{ env.AUTOSE_BASE_REF }}", path: work, persist-credentials: false, fetch-depth: 0 }
       - uses: actions/setup-python@v5
         with: { python-version: "${{ env.PYTHON_VERSION }}" }
       - name: Download state bundle
@@ -151,9 +151,9 @@ jobs:
       status: ${{ steps.rev.outputs.status }}
       verdict: ${{ steps.rev.outputs.verdict }}
     steps:
-      - name: Checkout tooling (trusted, main)
+      - name: Checkout tooling (trusted, master)
         uses: actions/checkout@v4
-        with: { path: tool, persist-credentials: false }
+        with: { ref: "${{ env.AUTOSE_BASE_REF }}", path: tool, persist-credentials: false }
       - name: Checkout PR head
         uses: actions/checkout@v4
         with: { path: pr, ref: "autose/issue-${{ env.ISSUE_NUMBER }}", persist-credentials: false }
@@ -197,7 +197,7 @@ jobs:
       issues: write      # stop comment and issue mirror (ADR-006)
     steps:
       - uses: actions/checkout@v4
-        with: { path: tool, persist-credentials: false }
+        with: { ref: "${{ env.AUTOSE_BASE_REF }}", path: tool, persist-credentials: false }
       - uses: actions/setup-python@v5
         with: { python-version: "${{ env.PYTHON_VERSION }}" }
       - name: Download state bundle
