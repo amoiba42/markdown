@@ -3,6 +3,7 @@
 Event fields reach this code only through environment variables (ADR-006).
 """
 
+import base64
 import io
 import json
 import os
@@ -31,6 +32,7 @@ SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),                               # OpenAI / OpenRouter style
     re.compile(r"(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{16,}"),
+    re.compile(r"(?i)(basic\s+)[A-Za-z0-9+/=]{16,}"),                    # HTTP basic auth (e.g. git extraheader)
     re.compile(r"(?i)((?:api[_-]?key|key|token|secret|password)[\"']?\s*[=:]\s*[\"']?)[A-Za-z0-9._\-]{12,}"),
 ]
 
@@ -110,6 +112,9 @@ def redact(text: str) -> str:
         val = os.environ.get(name, "")
         if len(val) >= 8:
             text = text.replace(val, "[redacted]")
+            for form in (f"x-access-token:{val}", val):    # also the base64 form used in auth headers
+                b64 = base64.b64encode(form.encode()).decode()
+                text = text.replace(b64, "[redacted]").replace(b64.rstrip("="), "[redacted]")
     for pat in SECRET_PATTERNS:
         text = pat.sub(lambda m: (m.group(1) if m.lastindex else "") + "[redacted]", text)
     return text

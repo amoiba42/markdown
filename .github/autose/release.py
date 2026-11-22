@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from common import ART, ISSUE, REPO, RUN_URL, gh_api, load_state, log, set_output, write_explanation
+from common import ART, ISSUE, REPO, RUN_URL, gh_api, load_state, log, redact, set_output, write_explanation
 from config import BASE_REF, CI_POLL_SECONDS
 
 CHECKOUT = Path(os.environ.get("AUTOSE_CHECKOUT", "work"))
@@ -67,8 +67,11 @@ def push(state: dict, patch: Path) -> str:
         git("apply", "--index", "--binary", str(patch))
     git("-c", "user.name=autose-bot", "-c", "user.email=autose-bot@users.noreply.github.com",
         "commit", "-q", "--allow-empty", "-m", f"autose: issue #{ISSUE}, round {state['review_round'] + 1}")
-    subprocess.run(["git", "-c", header, "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
-                   cwd=CHECKOUT, check=True, capture_output=True)
+    # The auth header is never part of an error message: only the return code and git's stderr are kept.
+    res = subprocess.run(["git", "-c", header, "push", "-q", "origin", f"HEAD:refs/heads/{branch}"],
+                         cwd=CHECKOUT, capture_output=True, text=True)
+    if res.returncode:
+        raise Stop(f"git push to {branch} failed ({res.returncode}): {redact(res.stderr)[-1500:]}")
     return git("rev-parse", "HEAD")
 
 
@@ -130,8 +133,11 @@ def main() -> None:
             raise Stop(f"G5 failed: {msg}")
         set_output("pr", str(pr))
         set_output("status", "ready")
-    except (Stop, subprocess.CalledProcessError, RuntimeError) as e:
+    except (Stop, RuntimeError) as e:
         write_explanation("Stage 5", "release stopped", str(e))
+    except subprocess.CalledProcessError as e:     # str(e) would include the command line; keep only stderr
+        write_explanation("Stage 5", "release stopped", f"a command failed ({e.returncode}): "
+                          f"{(e.stderr or b'')[-1500:]!r}")
         set_output("status", "stop")
     except Exception as e:                          # never crash without an explanation (ADR-006)
         write_explanation("Stage 5", f"internal error: {type(e).__name__}", traceback.format_exc())
