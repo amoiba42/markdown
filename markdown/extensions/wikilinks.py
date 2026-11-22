@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from . import Extension
 from ..inlinepatterns import InlineProcessor
+from ..util import AtomicString
 import xml.etree.ElementTree as etree
 import re
 from typing import Any
@@ -76,10 +77,13 @@ class WikiLinksInlineProcessor(InlineProcessor):
         target = m.group(1).strip()
         if target:
             base_url, end_url, html_class = self._getMeta()
-            label = m.group(2).strip() if m.group(2) else target
+            has_custom_label = m.group(2) is not None
+            label = m.group(2).strip() if has_custom_label else target
             url = self.config['build_url'](target, base_url, end_url)
             a = etree.Element('a')
-            a.text = label
+            # Use AtomicString for custom labels to prevent further markdown processing
+            # Plain wikilinks continue to allow markdown processing in the link text
+            a.text = AtomicString(label) if has_custom_label else label
             a.set('href', url)
             if html_class:
                 a.set('class', html_class)
