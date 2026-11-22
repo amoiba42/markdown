@@ -26,10 +26,14 @@ Write **/ws/out/review.json** with exactly this shape:
 }
 ```
 
-- `verdict`: approve or changes_requested. Use changes_requested if any finding is major or a blocker.
+- `verdict`: approve or changes_requested. Use changes_requested if any finding is major or a blocker;
+  an approval with such a finding is rejected by the evidence check.
+- `severity`: minor (style or a nit; does not block), major (wrong or missing behaviour), blocker (breaks
+  something or is unsafe).
 - `classification` names the stage that must fix it: spec (the request was misread), design (wrong approach),
   code (implementation bug), test (the tests are wrong or too weak).
-- `evidence` is either {"file", "line"} (line must exist) or {"command", "excerpt"} (a command you actually ran).
+- `evidence` is either {"file", "line"} (line must exist) or {"command", "excerpt"} (a command you actually ran,
+  copied as you ran it). `approval_evidence` is required in both verdicts; it may be empty for changes_requested.
 - `drift_reference` (optional) points only at the issue, a file:line, or a section of ARCHITECTURE.md.
 - File paths are relative to /ws/pr.
 

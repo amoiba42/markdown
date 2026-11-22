@@ -7,6 +7,7 @@
   once to the same-family fallback and retries again; only then does the stage stop.
 """
 
+import copy
 import json
 import random
 import re
@@ -18,15 +19,18 @@ from minisweagent.agents.default import DefaultAgent
 from minisweagent.environments.local import LocalEnvironment
 from minisweagent.exceptions import FormatError, InterruptAgentFlow, LimitsExceeded
 from minisweagent.models.litellm_model import LitellmModel
+from minisweagent.models.utils.cache_control import _clear_cache_control
 
 import sandbox
 from common import log
 from config import MODELS, RUN_TOKEN_CAP, STAGE_TOKEN_CAP, STEP_LIMIT, WALL_SECONDS
 
 RUN_TOKENS = {"total": 0}
-TRANSIENT = (litellm.exceptions.RateLimitError, litellm.exceptions.ServiceUnavailableError)
-RETRIES = 4                   # retries per call on the same model before the fallback
-MAX_WAIT = 90                 # seconds; longest single wait
+TRANSIENT = (litellm.exceptions.RateLimitError, litellm.exceptions.ServiceUnavailableError,
+             litellm.exceptions.InternalServerError)   # 429, 503, and 500/529 overloaded
+RETRIES = 3                   # retries per call on the same model before the fallback
+MAX_WAIT = 60                 # seconds; longest single wait
+MAX_TOKENS = 16000            # per response; litellm's default is too small for a thinking model's turn
 FINISH = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
 SYSTEM_FOOTER = f"""
@@ -55,9 +59,10 @@ def _wait_for(e: Exception, attempt: int) -> float | None:
     return min(MAX_WAIT, base) * random.uniform(1.0, 1.5)   # jitter so parallel runs drift apart
 
 
-def _retry(call):
+def _retry(call, on_wait=None):
     """Run call(); on a transient error wait (server hint, exponential, jitter) and retry. Re-raise at once on a
-    daily quota, or after RETRIES retries, so the caller can switch to the fallback model."""
+    daily quota, or after RETRIES retries, so the caller can switch to the fallback model.
+    `on_wait(seconds)` is told about every wait, so the caller can keep it out of its wall-clock cap."""
     for attempt in range(RETRIES):
         try:
             return call()
@@ -68,7 +73,13 @@ def _retry(call):
                 raise
             log(f"{type(e).__name__}; retrying in {wait:.0f}s")
             time.sleep(wait)
+            if on_wait:
+                on_wait(wait)
     return call()
+
+
+def model_kwargs(model: str) -> dict:
+    return {"max_tokens": MAX_TOKENS} if model.startswith("anthropic/") else {}
 
 
 class CappedModel(LitellmModel):
@@ -78,16 +89,33 @@ class CappedModel(LitellmModel):
         primary, fallback = MODELS[role]
         super().__init__(model_name=primary, cost_tracking="ignore_errors", **kwargs)
         self.fallback, self.switched, self.tokens = fallback, False, 0
+        self.agent = None                       # set by Agent; waits are kept out of its wall-clock cap
+        self._use(primary)
+
+    def _use(self, model: str) -> None:
+        """Switch model; prompt-cache markers and max_tokens only for Claude models."""
+        self.config.model_name = model
+        self.config.model_kwargs = model_kwargs(model)
+        self.config.set_cache_control = "default_end" if model.startswith("anthropic/") else None
+
+    def _waited(self, seconds: float) -> None:
+        if self.agent is not None:
+            self.agent._start_time += seconds
 
     def _query(self, messages, **kwargs):
+        call = lambda: super(CappedModel, self)._query(messages, **kwargs)
         try:
-            return _retry(lambda: super(CappedModel, self)._query(messages, **kwargs))
+            return _retry(call, self._waited)
         except TRANSIENT:
             if self.switched or self.fallback == self.config.model_name:
                 raise
             log(f"transient error on {self.config.model_name}; falling back once to {self.fallback}")
-            self.switched, self.config.model_name = True, self.fallback
-            return _retry(lambda: super(CappedModel, self)._query(messages, **kwargs))
+            self.switched = True
+            self._use(self.fallback)
+            plain = copy.deepcopy(messages)
+            for m in plain:
+                _clear_cache_control(m)         # Claude prompt-cache markers mean nothing to other providers
+            return _retry(lambda: super(CappedModel, self)._query(plain, **kwargs), self._waited)
 
     def query(self, messages, **kwargs):
         if self.tokens >= STAGE_TOKEN_CAP or RUN_TOKENS["total"] >= RUN_TOKEN_CAP:
@@ -129,6 +157,7 @@ class Agent:
             system_template=_raw(system + SYSTEM_FOOTER), instance_template="{{ task }}",
             step_limit=STEP_LIMIT[cap_key], cost_limit=0.0,
             wall_time_limit_seconds=WALL_SECONDS[cap_key], output_path=trajectory)
+        self.model.agent = self.agent
 
     def start(self, task: str) -> dict:
         try:
@@ -191,12 +220,12 @@ def llm_json(role: str, system: str, user: str, avoid_model: str | None = None) 
     tokens, model, switched = 0, models[0], False
     for attempt in range(2):
         try:
-            resp = _retry(lambda: litellm.completion(model=model, messages=msgs))
+            resp = _retry(lambda: litellm.completion(model=model, messages=msgs, **model_kwargs(model)))
         except TRANSIENT:
             if switched or len(models) < 2:
                 raise
             switched, model = True, models[1]
-            resp = _retry(lambda: litellm.completion(model=model, messages=msgs))
+            resp = _retry(lambda: litellm.completion(model=model, messages=msgs, **model_kwargs(model)))
         tokens += _usage(resp.model_dump())
         text = resp.choices[0].message.content or ""
         try:

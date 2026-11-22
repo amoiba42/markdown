@@ -7,7 +7,8 @@ $context
 $design
 ```
 
-Implement the design in /ws/work. Change only the target files (you may add tests of your own under tests/).
+Implement the design in /ws/work. Change only the target files. You may add tests of your own, but only as
+files named tests/**/test_*.py; any other new or changed file is rejected by the scope check.
 Run the existing tests with `cd /ws/work && python -m pytest -q` and make sure you did not break them.
 Then write **/ws/out/attempt_summary.md**: at most 200 words on what you changed and why.
 

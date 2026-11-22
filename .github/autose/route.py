@@ -12,8 +12,8 @@ import re
 import shutil
 import sys
 
-from common import (ART, ISSUE, REPO, RUN_URL, comment, download_latest_bundle, gh_api, load_state, log,
-                    read, save_state, short_error, STOP_MARK, update_mirror, upsert_comment)
+from common import (ART, DONE_MARK, ISSUE, REPO, RUN_URL, STOP_MARK, delete_comment, download_latest_bundle,
+                    gh_api, load_state, log, read, save_state, short_error, update_mirror, upsert_comment)
 from config import BASE_REF, MAX_REVIEW_ROUNDS
 
 STAGE_OF = {"spec": 1, "design": 2, "code": 3, "test": 4}
@@ -50,8 +50,12 @@ def main() -> None:
         where = f" at {m.group(1).strip()}" if m else ""
         upsert_comment(STOP_MARK, f"**AutoSE stopped{where}.** {short_error(reason)}\n\n"
                        f"Full explanation (artifact): {RUN_URL}")
+    elif not (ART / "review" / "review.json").exists():
+        state["status"] = "stopped"
+        upsert_comment(STOP_MARK, "**AutoSE stopped.** The review finished but its review.json was not found "
+                       f"(artifact download failed?).\n\nRun: {RUN_URL}")
     else:
-        review = json.loads(read(ART / "review" / "review.json") or "{}")
+        review = json.loads(read(ART / "review" / "review.json"))
         verdict = review.get("verdict")
         state["review_round"] += 1
         if (ART / "review" / "review.json").exists():
@@ -59,10 +63,13 @@ def main() -> None:
         if verdict == "approve" or state["review_round"] >= MAX_REVIEW_ROUNDS:
             state.update(done=True, status="done", target_stage=None)
             why = "approved" if verdict == "approve" else f"{MAX_REVIEW_ROUNDS} review rounds used"
-            comment(f"**AutoSE finished ({why}).** PR #{state.get('pr')} is ready for a human decision. "
-                    "AutoSE never merges.")
+            delete_comment(STOP_MARK)
+            upsert_comment(DONE_MARK, f"**AutoSE finished ({why}).** PR #{state.get('pr')} is ready for a human "
+                           "decision. AutoSE never merges.")
         else:
-            target = min(STAGE_OF[f["classification"]] for f in review["findings"]) if review["findings"] else 3
+            delete_comment(STOP_MARK)
+            findings = review.get("findings", [])
+            target = min(STAGE_OF[f["classification"]] for f in findings) if findings else 3
             state.update(target_stage=target, last_passed=target - 1, sendback="review", status="re-entry")
             save_state(state)
             gh_api(f"/repos/{REPO}/actions/workflows/autose.yml/dispatches", method="POST",

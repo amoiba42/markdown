@@ -5,7 +5,7 @@
 - Open or reuse the pull request with a minimal pr.md (ADR-002).
 - G5: the pull request is open and CI passes, polled for up to 10 minutes (ADR-007).
 
-Outputs: status = ready | stop, pr = <number>
+Outputs: status = ready | stop, pr = <number>, base = <commit the branch started from>
 """
 
 import base64
@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from common import ART, ISSUE, REPO, RUN_URL, gh_api, load_state, log, set_output, write_explanation
@@ -23,6 +24,7 @@ from config import BASE_REF, CI_POLL_SECONDS
 CHECKOUT = Path(os.environ.get("AUTOSE_CHECKOUT", "work"))
 SECRET_PATTERNS = {
     "GitHub token": r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}",
+    "Anthropic key": r"sk-ant-[A-Za-z0-9_\-]{20,}",
     "Google API key": r"AIza[0-9A-Za-z_\-]{35}",
     "OpenRouter key": r"sk-or-[A-Za-z0-9\-]{20,}",
     "OpenAI-style key": r"sk-[A-Za-z0-9]{32,}",
@@ -86,15 +88,28 @@ def open_pr(state: dict, changed: list[str]) -> int:
 
 
 def wait_for_ci(sha: str) -> tuple[bool, str]:
-    deadline = time.time() + CI_POLL_SECONDS
+    """All check runs on the commit completed and passed. The push run and the pull_request run register at
+    different times, so a result counts only after a minute has passed and the set of runs is unchanged
+    across two polls."""
+    start = time.time()
+    deadline, seen = start + CI_POLL_SECONDS, None
     while time.time() < deadline:
         runs = gh_api(f"/repos/{REPO}/commits/{sha}/check-runs").get("check_runs", [])
-        if runs and all(r["status"] == "completed" for r in runs):
+        ids = sorted(r["id"] for r in runs)
+        settled = runs and all(r["status"] == "completed" for r in runs)
+        if settled and ids == seen and time.time() - start >= 60:
             bad = [f"{r['name']}: {r['conclusion']}" for r in runs
                    if r["conclusion"] not in ("success", "skipped", "neutral")]
             return (not bad), "; ".join(bad) or f"{len(runs)} checks passed"
+        seen = ids if settled else None
         time.sleep(20)
     return False, f"CI did not finish within {CI_POLL_SECONDS}s"
+
+
+def branch_base() -> str:
+    """The commit on the base branch the AutoSE branch started from. The reviewer diffs against it, so later
+    commits on the base branch (for example tooling updates) do not show up as reversed changes."""
+    return git("merge-base", f"origin/{BASE_REF}", "HEAD")
 
 
 def main() -> None:
@@ -106,6 +121,7 @@ def main() -> None:
             raise Stop(f"secret scan matched: {found}")
         changed = sorted({l[6:] for l in patch.read_text().splitlines() if l.startswith("+++ b/")})
         sha = push(state, patch)
+        set_output("base", branch_base())
         pr = open_pr(state, changed)
         state["branch_head"], state["pr"] = sha, pr
         ok, msg = wait_for_ci(sha)
@@ -116,6 +132,9 @@ def main() -> None:
         set_output("status", "ready")
     except (Stop, subprocess.CalledProcessError, RuntimeError) as e:
         write_explanation("Stage 5", "release stopped", str(e))
+        set_output("status", "stop")
+    except Exception as e:                          # never crash without an explanation (ADR-006)
+        write_explanation("Stage 5", f"internal error: {type(e).__name__}", traceback.format_exc())
         set_output("status", "stop")
     finally:
         (ART / "release_state.json").write_text(json.dumps(

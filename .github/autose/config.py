@@ -17,20 +17,23 @@ SANDBOX_WS = "/ws"         # path of WS inside the sandbox container
 # ---------- Base commit of the fork (Python-Markdown) ----------
 BASE_REF = os.environ.get("AUTOSE_BASE_REF", "master")
 
-# ---------- Models (ADR-011) ----------
-# Each role: primary model and one same-family fallback that keeps both splits:
-# no code-writing agent uses the reviewer's model; the judge never uses the requirements model.
-G = "gemini/"
-# ADR-015: the fallback is a model from another provider (OpenRouter), so a Gemini quota stop does not end the run.
-# The reviewer keeps a Gemini fallback: the code-writing roles can fall back to FALLBACK, and the reviewer
-# must never share a model with them. The judge avoids the requirements model at call time (agents.llm_json).
+# ---------- Models (ADR-011, ADR-016) ----------
+# Each role: (primary, fallback). Two splits must hold for every pair:
+# no code-writing agent (design, implement, tester) uses the reviewer's model, and the judge never uses the
+# model the requirements agent ran on (the judge avoids it at call time, agents.llm_json).
+# Primaries are Claude, tiered by how much the role's output matters: the reviewer on Opus, the agents that
+# write the spec, design, code and tests on Sonnet, the testability judge (a yes/no per criterion) on Haiku.
+# Fallbacks come from other providers, so a Claude rate limit does not end the run and no code-writer
+# can fall back onto the reviewer's model.
+A, G = "anthropic/", "gemini/"
+OPUS, SONNET, HAIKU = A + "claude-opus-5-5", A + "claude-sonnet-5-5", A + "claude-haiku-5-5"
 FALLBACK = os.environ.get("AUTOSE_FALLBACK_MODEL", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free")
 MODELS = {
-    "requirements": (G + "gemini-3.5-flash-lite", FALLBACK),
-    "design":       (G + "gemini-3.8-flash", FALLBACK),
-    "tester":       (G + "gemini-3.6-flash", FALLBACK),
-    "judge":        (G + "gemini-3.8-flash", FALLBACK),
-    "reviewer":     (G + "gemini-4-hydrogen", G + "gemini-3.5-flash-lite"),
+    "requirements": (SONNET, HAIKU),
+    "design":       (SONNET, FALLBACK),          # also runs Stage 3 (implementation)
+    "tester":       (SONNET, FALLBACK),
+    "judge":        (HAIKU, G + "gemini-3.8-flash"),
+    "reviewer":     (OPUS, G + "gemini-4-hydrogen"),
 }
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
 VARIANT = os.environ.get("AUTOSE_VARIANT", "A")
@@ -40,6 +43,8 @@ if VARIANT == "B":
     MODELS["reviewer"] = (OPENROUTER_QWEN, OPENROUTER_QWEN)
 
 # ---------- Caps (ADR-006); numbers are TUNE ----------
+MAX_STAGE_REASKS = 1             # ADR-017: re-asks of the same agent after its own check (G1, G2, G6) fails
+STAGE4_TESTER_RETRIES = 1        # ADR-017: Stage 4 failures caused by the tester's own files go back to the tester
 STEP_LIMIT = {"requirements": 25, "design": 30, "implement": 60, "tester": 40, "reviewer": 40}
 WALL_SECONDS = {"requirements": 600, "design": 900, "implement": 1500, "tester": 1200, "reviewer": 1200}
 STAGE_TOKEN_CAP = 1_500_000      # input + output tokens per agent stage

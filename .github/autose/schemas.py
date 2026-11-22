@@ -14,7 +14,7 @@ SPEC = {
     "properties": {
         "issue": {"type": "integer"},
         "summary": _STR,
-        "acceptance_criteria": {"type": "array", "minItems": 1, "items": {
+        "acceptance_criteria": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
             "type": "object", "required": ["id", "text", "verify_by"], "additionalProperties": False,
             "properties": {"id": {"type": "string", "pattern": r"^AC-[1-9][0-9]*$"}, "text": _STR, "verify_by": _STR}}},
         "assumptions": {"type": "array", "items": _STR},
@@ -24,12 +24,12 @@ SPEC = {
 
 REJECT = {
     "type": "object", "required": ["reason", "questions"], "additionalProperties": False,
-    "properties": {"reason": _STR, "questions": {"type": "array", "minItems": 1, "items": _STR}},
+    "properties": {"reason": _STR, "questions": {"type": "array", "minItems": 1, "maxItems": 5, "items": _STR}},
 }
 
 JUDGE = {
     "type": "array", "minItems": 1,
-    "items": {"type": "object", "required": ["id", "testable", "reason"],
+    "items": {"type": "object", "required": ["id", "testable", "reason"], "additionalProperties": False,
               "properties": {"id": _STR, "testable": {"type": "boolean"}, "reason": {"type": "string"}}},
 }
 
@@ -37,11 +37,11 @@ DESIGN = {
     "type": "object", "required": ["approach", "targets"], "additionalProperties": False,
     "properties": {
         "approach": _STR,
-        "targets": {"type": "array", "minItems": 1, "items": {
+        "targets": {"type": "array", "minItems": 1, "maxItems": 10, "items": {
             "type": "object", "required": ["file", "symbol", "kind", "signature", "status"],
             "additionalProperties": False,
             "properties": {"file": _STR, "symbol": _STR,
-                           "kind": {"enum": ["function", "class", "method", "module"]},
+                           "kind": {"enum": ["function", "class", "method", "attribute", "module"]},
                            "signature": {"type": "string"}, "status": {"enum": ["EXISTING", "NEW"]}}}},
     },
 }
@@ -76,7 +76,20 @@ def load_and_validate(path: Path, schema: dict) -> tuple[object | None, str]:
         return None, f"{path.name} was not written"
     try:
         data = json.loads(path.read_text())
-        jsonschema.validate(data, schema)
-        return data, ""
-    except (json.JSONDecodeError, jsonschema.ValidationError) as e:
-        return None, f"{path.name}: {str(e)[:1500]}"
+    except json.JSONDecodeError as e:
+        return None, f"{path.name} is not valid JSON: {e}"
+    problems = explain(data, schema)
+    return (data, "") if not problems else (None, f"{path.name}: " + "; ".join(problems))
+
+
+def explain(data, schema: dict, limit: int = 6) -> list[str]:
+    """Schema errors as short `at <path>: <problem>` lines an agent can act on. For a oneOf (evidence), the
+    error of the closest alternative is shown instead of 'not valid under any of the given schemas'."""
+    validator = jsonschema.Draft202012Validator(schema)
+    out = []
+    for err in sorted(validator.iter_errors(data), key=lambda e: list(e.absolute_path))[:limit]:
+        if err.validator == "oneOf" and err.context:
+            err = jsonschema.exceptions.best_match(err.context)
+        where = "/".join(str(p) for p in err.absolute_path) or "(top level)"
+        out.append(f"at {where}: {err.message[:300]}")
+    return out

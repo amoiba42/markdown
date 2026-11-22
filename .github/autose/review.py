@@ -13,6 +13,7 @@ import os
 import secrets
 import shutil
 import sys
+import traceback
 from pathlib import Path
 from string import Template
 
@@ -21,7 +22,7 @@ import sandbox
 import schemas
 from agents import Agent
 from common import ART, ISSUE, REPO, gh_api, log, set_output, write_explanation
-from config import PROMPTS, WS
+from config import MAX_STAGE_REASKS, PROMPTS, WS
 
 PR_CHECKOUT = Path(os.environ.get("AUTOSE_PR_CHECKOUT", "pr"))
 INPUT = Path(os.environ.get("AUTOSE_REVIEW_INPUT", "review_input"))
@@ -65,8 +66,9 @@ def main() -> None:
         _, passed, failed, out = gates.run_pytest(pr_ws, "review")
         new_failures = sorted(failed - set(baseline["failed"]))
         test_summary = f"passed: {len(passed)}, failed: {len(failed)}, new failures vs baseline: {new_failures[:30]}"
-        sandbox.run(f"git fetch -q --depth=1 origin {BASE_SHA}", cwd="/ws/pr")
-        _, diff = sandbox.run(f"git diff {BASE_SHA} HEAD", cwd="/ws/pr")
+        rc, diff = sandbox.run(f"git diff {BASE_SHA} HEAD", cwd="/ws/pr")
+        if rc != 0 or not diff.strip():
+            raise Stop(f"could not diff the pull request against its base {BASE_SHA}: {diff[-500:]}")
 
         # 2. Reviewer agent: issue snapshot, diff, repo at PR HEAD, test results. Nothing else.
         tag = f"untrusted-{secrets.token_hex(6)}"
@@ -87,8 +89,20 @@ def main() -> None:
             if review is None:
                 raise Stop(f"review.json failed its schema after one re-ask: {err}")
 
-        # 3. G6: evidence check (ADR-007).
-        ok, msg = gates.g6(review, pr_ws, agent.commands_run(), new_failures)
+        # 3. G6: evidence check (ADR-007), one re-ask of the same reviewer when it fails.
+        for attempt in range(MAX_STAGE_REASKS + 1):
+            ok, msg = gates.g6(review, pr_ws, agent.commands_run(), new_failures)
+            if ok or attempt == MAX_STAGE_REASKS:
+                break
+            log(f"G6 failed, one re-ask: {msg}")
+            result = agent.resume(
+                f"The evidence check failed:\n{msg}\n\nFix /ws/out/review.json. File evidence must be a path "
+                "relative to /ws/pr and a line that exists. Command evidence must be a command you actually ran "
+                "in this session; run it now if you have not. An approval needs a pytest command you ran and no "
+                "major or blocker finding. Then finish.", "reviewer")
+            review, err = schemas.load_and_validate(OUT / "review.json", schemas.REVIEW)
+            if review is None:
+                raise Stop(f"review.json failed its schema after the G6 re-ask: {err}")
         (ART / "review.json").write_text(json.dumps(review, indent=2))
         (ART / "g6.json").write_text(json.dumps({"passed": ok, "message": msg, "tokens": result["tokens"],
                                                  "model": result["model"]}, indent=2))
@@ -109,6 +123,9 @@ def main() -> None:
         set_output("status", "ready")
     except (Stop, RuntimeError, FileNotFoundError, json.JSONDecodeError) as e:
         write_explanation("Stage 6", "review stopped", str(e))
+        set_output("status", "stop")
+    except Exception as e:                          # never crash without an explanation (ADR-006)
+        write_explanation("Stage 6", f"internal error: {type(e).__name__}", traceback.format_exc())
         set_output("status", "stop")
     finally:
         sandbox.stop()

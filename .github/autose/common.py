@@ -23,6 +23,7 @@ BUNDLE = f"autose-issue-{ISSUE}"
 MIRROR_MARK = "<!-- autose-mirror -->"
 STOP_MARK = "<!-- autose-stop -->"
 ASSUMPTIONS_MARK = "<!-- autose-assumptions -->"
+DONE_MARK = "<!-- autose-done -->"
 
 # Strings that look like credentials. Anything posted to a public issue or uploaded goes through redact().
 SECRET_PATTERNS = [
@@ -104,7 +105,7 @@ def download_latest_bundle() -> bool:
 
 def redact(text: str) -> str:
     """Replace credential-shaped strings, and the values of known secret variables, with [redacted]."""
-    for name in ("GEMINI_API_KEY", "OPENROUTER_API_KEY", "GH_TOKEN", "AUTOSE_PAT"):
+    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "GH_TOKEN", "AUTOSE_PAT"):
         val = os.environ.get(name, "")
         if len(val) >= 8:
             text = text.replace(val, "[redacted]")
@@ -117,7 +118,12 @@ def short_error(text: str, limit: int = 400) -> str:
     """One readable line for a public comment: the provider's message when there is one, never the raw payload."""
     text = redact(text)
     m = re.search(r'"message":\s*"((?:[^"\\]|\\.)*)"', text)
-    line = m.group(1).replace("\\n", " ") if m else text.strip().splitlines()[0] if text.strip() else ""
+    if m:
+        line = m.group(1).replace("\\n", " ")
+    else:   # explanation.md without a provider payload: keep the reason and the detail, drop headings and links
+        keep = [l.strip() for l in text.splitlines()
+                if l.strip() and not l.startswith(("#", "```", "- Stage:", "- Run:"))]
+        line = " ".join(l.removeprefix("- Reason:").strip() for l in keep)
     line = re.sub(r"\s+", " ", line.split("For more information")[0]).strip()
     return line[:limit] or "no details"
 
@@ -126,15 +132,34 @@ def comment(body: str) -> None:
     gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments", method="POST", fields={"body": redact(body)})
 
 
+def _marked(mark: str) -> list[dict]:
+    """Comments on the issue that start with `mark`, across all pages."""
+    found, page = [], 1
+    while True:
+        batch = gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments?per_page=100&page={page}")
+        found += [c for c in batch if c["body"].startswith(mark)]
+        if len(batch) < 100:
+            return found
+        page += 1
+
+
 def upsert_comment(mark: str, body: str) -> None:
     """Keep one comment per kind on the issue: edit the one that starts with `mark`, else create it."""
     body = redact(f"{mark}\n{body}")
-    comments = gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments?per_page=100")
-    mine = [c for c in comments if c["body"].startswith(mark)]
+    mine = _marked(mark)
     if mine:
         gh_api(f"/repos/{REPO}/issues/comments/{mine[0]['id']}", method="PATCH", fields={"body": body})
     else:
         gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments", method="POST", fields={"body": body})
+
+
+def delete_comment(mark: str) -> None:
+    """Remove the comment of one kind, e.g. a stop comment once a later run went past that stop."""
+    try:
+        for c in _marked(mark):
+            gh_api(f"/repos/{REPO}/issues/comments/{c['id']}", method="DELETE")
+    except RuntimeError as e:                       # cosmetic; never fail a job on it
+        log(f"could not delete {mark} comment: {e}")
 
 
 def update_mirror(state: dict, note: str = "") -> None:

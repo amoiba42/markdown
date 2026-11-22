@@ -75,17 +75,34 @@ def g1_judge(spec: dict, verdicts: list) -> tuple[bool, str]:
 
 # ---------- G2: design targets ----------
 
-def _symbols(source: str) -> set[str]:
-    """Top-level functions/classes and Class.method names defined in a module."""
-    names = set()
-    for node in ast.parse(source).body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        if isinstance(node, ast.ClassDef):
-            for sub in node.body:
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    names.add(f"{node.name}.{sub.name}")
-    return names
+def definitions(source: str) -> dict[str, str]:
+    """Every name a design target can point at, with its kind: classes, functions (nested as outer.inner),
+    methods (Class.method, also in nested classes), and attributes (module constants as NAME, class
+    attributes as Class.NAME). Definitions under module- or class-level if/try/with count too."""
+    found: dict[str, str] = {}
+
+    def visit(body: list, prefix: str, in_class: bool, in_function: bool) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                found[prefix + node.name] = "method" if in_class else "function"
+                visit(node.body, f"{prefix}{node.name}.", False, True)
+            elif isinstance(node, ast.ClassDef):
+                found[prefix + node.name] = "class"
+                visit(node.body, f"{prefix}{node.name}.", True, False)
+            elif not in_function and isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for t in targets:
+                    for n in ast.walk(t):
+                        if isinstance(n, ast.Name):
+                            found.setdefault(prefix + n.id, "attribute")
+            elif not in_function and isinstance(node, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+                for part in ("body", "orelse", "finalbody"):
+                    visit(getattr(node, part, []) or [], prefix, in_class, in_function)
+                for h in getattr(node, "handlers", []) or []:
+                    visit(h.body, prefix, in_class, in_function)
+
+    visit(ast.parse(source).body, "", False, False)
+    return found
 
 
 def g2(design: dict, repo: Path) -> tuple[bool, str]:
@@ -94,16 +111,42 @@ def g2(design: dict, repo: Path) -> tuple[bool, str]:
         return False, f"{len(targets)} targets; at most {MAX_DESIGN_TARGETS} allowed"
     problems = []
     for t in targets:
-        f = repo / t["file"]
-        if is_protected(t["file"]) or ".." in t["file"]:
-            problems.append(f"{t['file']}: protected or invalid path")
-        elif t["status"] == "EXISTING":
-            if not f.is_file():
-                problems.append(f"{t['file']}: EXISTING file not found")
-            elif t["kind"] != "module" and t["symbol"] not in _symbols(safe_read(f)):
-                problems.append(f"{t['file']}: EXISTING symbol {t['symbol']} not found")
-        elif not f.parent.is_dir():
-            problems.append(f"{t['file']}: parent module {f.parent.relative_to(repo)} does not exist")
+        f, kind, sym = repo / t["file"], t["kind"], t["symbol"]
+        where = f"{t['file']} {sym}"
+        if is_protected(t["file"]) or ".." in t["file"] or t["file"].startswith("/"):
+            problems.append(f"{t['file']}: protected or invalid path (paths are relative to the repository root)")
+            continue
+        if not t["file"].endswith(".py") and kind != "module":
+            problems.append(f"{where}: {t['file']} is not a Python file; use kind \"module\" for the whole file")
+            continue
+        if t["status"] == "NEW":
+            if not f.parent.is_dir():
+                problems.append(f"{where}: parent directory {f.parent.relative_to(repo)} does not exist")
+            elif kind == "module" and f.exists():
+                problems.append(f"{where}: marked NEW but the file already exists; use EXISTING")
+            elif kind != "module" and f.is_file():
+                try:
+                    if sym in definitions(safe_read(f)):
+                        problems.append(f"{where}: marked NEW but already defined in the file; use EXISTING")
+                except SyntaxError:
+                    pass                      # an unparsable file is reported when it is a target as EXISTING
+            continue
+        if not f.is_file():
+            problems.append(f"{where}: EXISTING file not found")
+            continue
+        if kind == "module":
+            continue
+        try:
+            defs = definitions(safe_read(f))
+        except SyntaxError as e:
+            problems.append(f"{where}: cannot parse {t['file']}: {e.msg} (line {e.lineno})")
+            continue
+        if sym not in defs:
+            near = sorted(d for d in defs if d.split(".")[-1] == sym.split(".")[-1])[:5]
+            hint = f"; did you mean {near}?" if near else ""
+            problems.append(f"{where}: EXISTING symbol not found{hint}")
+        elif defs[sym] != kind:
+            problems.append(f"{where}: is a {defs[sym]}, not a {kind}")
     return (not problems), "; ".join(problems) or f"{len(targets)} targets verified"
 
 
@@ -144,29 +187,37 @@ def g3(ws: Path, base: str, design: dict, managed_tests: set[str]) -> tuple[bool
     return True, f"build ok, ruff ok, {len(changed)} files in scope"
 
 
-def _ruff_counts(ws: Path, path: str, source_cmd: str | None = None) -> dict[str, int]:
-    """Count ruff problems per rule. With `source_cmd`, lint its stdout as if it were `path` (same config)."""
+def _ruff_counts(ws: Path, path: str, source_cmd: str | None = None) -> tuple[dict[str, int], list[dict]]:
+    """Count ruff problems per rule, and return the problems. With `source_cmd`, lint its stdout as if it
+    were `path` (same config)."""
     q = sandbox.quote(path)
     cmd = (f"{source_cmd} | ruff check --output-format=json --exit-zero --stdin-filename {q} -" if source_cmd
            else f"ruff check --output-format=json --exit-zero {q}")
     _, out = sandbox.run(cmd, cwd=sandbox.ws_path(ws))
     counts: dict[str, int] = {}
+    items: list[dict] = []
     try:
-        for item in json.loads(out[out.find("["):] or "[]"):
+        items = json.loads(out[out.find("["):] or "[]")
+        for item in items:
             counts[item["code"]] = counts.get(item["code"], 0) + 1
     except json.JSONDecodeError:
         counts["ruff-output-unreadable"] = 1
-    return counts
+    return counts, items
 
 
 def new_lint(ws: Path, base: str, files: list[str]) -> list[str]:
     """`ruff` passes means: no lint problem that was not already in the file at the base commit."""
     problems = []
     for f in files:
-        after = _ruff_counts(ws, f)
+        after, items = _ruff_counts(ws, f)
         existed, _ = sandbox.run(f"git cat-file -e {base}:{sandbox.quote(f)}", cwd=sandbox.ws_path(ws))
-        before = _ruff_counts(ws, f, f"git show {base}:{sandbox.quote(f)}") if existed == 0 else {}
-        problems += [f"{f}: {code} x{n - before.get(code, 0)}" for code, n in after.items() if n > before.get(code, 0)]
+        before = _ruff_counts(ws, f, f"git show {base}:{sandbox.quote(f)}")[0] if existed == 0 else {}
+        for code, n in after.items():
+            if n > before.get(code, 0):
+                problems.append(f"{f}: {code} x{n - before.get(code, 0)} new")
+                for it in [i for i in items if i.get("code") == code][:5]:
+                    loc = it.get("location") or {}
+                    problems.append(f"  {f}:{loc.get('row')}:{loc.get('column')} {code} {it.get('message', '')}")
     return problems
 
 
@@ -184,6 +235,22 @@ def run_pytest(ws: Path, junit_name: str, select: str = "") -> tuple[int, set[st
     return rc, passed, failed, out
 
 
+def junit_failures(junit_name: str, limit: int = 15) -> dict[str, str]:
+    """First line of the error for each failed test in the last run_pytest(junit_name): test id -> message."""
+    _, xml = sandbox.run(f"cat /tmp/{junit_name}.xml")
+    out: dict[str, str] = {}
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return out
+    for tc in root.iter("testcase"):
+        bad = tc.find("failure") if tc.find("failure") is not None else tc.find("error")
+        if bad is not None and len(out) < limit:
+            msg = (bad.get("message") or (bad.text or "")).strip().splitlines()
+            out[f"{tc.get('classname')}::{tc.get('name')}"] = (msg[0] if msg else "")[:200]
+    return out
+
+
 def parse_junit(xml: str) -> tuple[set[str], set[str]]:
     passed, failed = set(), set()
     try:
@@ -199,22 +266,45 @@ def parse_junit(xml: str) -> tuple[set[str], set[str]]:
     return passed, failed
 
 
+def syntax_errors(files: dict[str, str]) -> list[str]:
+    """Files that do not parse, with the error, so a broken test file fails a check instead of crashing it."""
+    bad = []
+    for path, src in files.items():
+        try:
+            ast.parse(src)
+        except SyntaxError as e:
+            bad.append(f"{path}: {e.msg} (line {e.lineno})")
+    return bad
+
+
+def _test_functions(tree: ast.AST, prefix: str = ""):
+    """(qualified name, node) for every test function, with the class name as prefix (Class.test_x)."""
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.ClassDef):
+            yield from _test_functions(node, f"{prefix}{node.name}.")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+            yield prefix + node.name, node
+
+
 def _assert_lines(source: str) -> dict[str, list[str]]:
-    """For each test function, the source text of its assert statements and assert* calls."""
-    tree, out = ast.parse(source), {}
-    for fn in ast.walk(tree):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test"):
-            items = []
-            for n in ast.walk(fn):
-                if isinstance(n, ast.Assert) or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                                                 and n.func.attr.startswith("assert")):
-                    items.append(ast.unparse(n))
-            out[fn.name] = items
+    """For each test function, the source text of its assert statements, assert* calls and pytest.raises/warns
+    contexts. Keyed by Class.test_name, so equal names in different classes stay apart."""
+    out = {}
+    for name, fn in _test_functions(ast.parse(source)):
+        items = []
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assert) or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                                             and n.func.attr.startswith("assert")):
+                items.append(ast.unparse(n))
+            elif isinstance(n, (ast.With, ast.AsyncWith)):
+                items += [ast.unparse(i.context_expr) for i in n.items if _is_raises(i.context_expr)]
+        out[name] = items
     return out
 
 
 def asserts_unchanged(phase1: dict[str, str], phase2: dict[str, str]) -> list[str]:
-    """Compare assert statements per test between tester phase 1 and phase 2 (ADR-012)."""
+    """Compare assert statements per test between tester phase 1 and phase 2 (ADR-012).
+    Both sides must parse; the caller checks that first."""
     changed = []
     for path, src1 in phase1.items():
         a1, a2 = _assert_lines(src1), _assert_lines(phase2.get(path, ""))
@@ -224,8 +314,30 @@ def asserts_unchanged(phase1: dict[str, str], phase2: dict[str, str]) -> list[st
     return changed
 
 
+RAISES = {"raises", "warns", "deprecated_call", "assertRaises", "assertRaisesRegex", "assertWarns"}
+
+
+def _is_raises(expr: ast.AST) -> bool:
+    """`pytest.raises(...)`, `raises(...)`, `self.assertRaises(...)` and the warning variants."""
+    if not isinstance(expr, ast.Call):
+        return False
+    f = expr.func
+    return (isinstance(f, ast.Attribute) and f.attr in RAISES) or (isinstance(f, ast.Name) and f.id in RAISES)
+
+
+def _imported_library_names(tree: ast.AST) -> set[str]:
+    """Names a test file binds from the library: `from markdown import Markdown` gives Markdown."""
+    names = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == IMPORT_NAME:
+            names |= {a.asname or a.name for a in n.names}
+        elif isinstance(n, ast.Import):
+            names |= {(a.asname or a.name).split(".")[0] for a in n.names if a.name.split(".")[0] == IMPORT_NAME}
+    return names
+
+
 def _meaningful(fn: ast.FunctionDef, symbols: set[str]) -> tuple[bool, bool]:
-    """(references a design target, has a non-trivial assert)."""
+    """(references a design target or the library, has a non-trivial assert or an expected-exception check)."""
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | \
             {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
     calls_target = bool(names & symbols)
@@ -236,27 +348,39 @@ def _meaningful(fn: ast.FunctionDef, symbols: set[str]) -> tuple[bool, bool]:
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr.startswith("assert") \
                 and n.args and not all(isinstance(a, ast.Constant) for a in n.args):
             real_assert = True
+        if isinstance(n, (ast.With, ast.AsyncWith)) and any(_is_raises(i.context_expr) for i in n.items):
+            real_assert = True
     return calls_target, real_assert
 
 
 def ac_coverage(spec: dict, tester_files: dict[str, str], passed: set[str], design: dict) -> list[str]:
-    """Every AC needs a passing test_ac<n>_* that calls a design target and has a real assert."""
+    """Every AC needs a passing test_ac<n>_* that calls a design target (or the library) and has a real assert.
+    The tester files must parse; the caller checks that first."""
     symbols = set()
     for t in design["targets"]:
         symbols |= set(t["symbol"].split("."))
     symbols.add(IMPORT_NAME)
     good: dict[int, bool] = {}
+    why: dict[int, str] = {}
     for src in tester_files.values():
-        for fn in ast.walk(ast.parse(src)):
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and (m := AC_TEST.match(fn.name)):
-                ok_target, ok_assert = _meaningful(fn, symbols)
-                did_pass = any(p.endswith("::" + fn.name) or ("::" + fn.name + "[") in p for p in passed)
-                good[int(m.group(1))] = good.get(int(m.group(1)), False) or (ok_target and ok_assert and did_pass)
+        tree = ast.parse(src)
+        file_symbols = symbols | _imported_library_names(tree)
+        for _, fn in _test_functions(tree):
+            if not (m := AC_TEST.match(fn.name)):
+                continue
+            n = int(m.group(1))
+            ok_target, ok_assert = _meaningful(fn, file_symbols)
+            did_pass = any(p.endswith("::" + fn.name) or ("::" + fn.name + "[") in p for p in passed)
+            good[n] = good.get(n, False) or (ok_target and ok_assert and did_pass)
+            if not good[n]:
+                why[n] = ("fails" if not did_pass else "") or ("calls no design target" if not ok_target
+                                                                else "has no real assert")
     problems = []
     for ac in spec["acceptance_criteria"]:
         n = int(ac["id"].split("-")[1])
         if not good.get(n):
-            problems.append(f"{ac['id']} has no passing test_ac{n}_* that calls a design target with a real assert")
+            detail = f" (test_ac{n}_* {why[n]})" if n in why else f" (no test_ac{n}_* exists)"
+            problems.append(f"{ac['id']} is not covered{detail}")
     return problems
 
 
@@ -280,31 +404,44 @@ def g4(ws: Path, spec: dict, design: dict, baseline_passed: set[str], tester_fil
         passed |= p2
         failed -= p2
         out += "\n--- re-run ---\n" + out2[-2000:]
-    report = {"passed": len(passed), "failed": sorted(failed), "output_tail": out[-3000:]}
+    errors = {t: m for t, m in junit_failures("g4_rerun" if failed else "g4").items() if t in failed}
+    report = {"passed": len(passed), "failed": sorted(failed), "errors": errors, "output_tail": out[-3000:]}
+    # The implementer never sees the tester's tests (ADR-012): the note names failing tests and the first
+    # line of each error, not the test source.
+    failing = "\n".join(f"- {t}: {m}" for t, m in list(errors.items())[:15]) or "- (no error text captured)"
     lost = sorted(t for t in baseline_passed if t not in passed)
     if lost:
-        return False, f"tests passing in baseline now fail or are missing: {lost[:20]}", report
+        return False, (f"tests passing in baseline now fail or are missing: {lost[:20]}\n"
+                       f"Failing tests and their first error line:\n{failing}"), report
     gaps = ac_coverage(spec, tester_files, passed, design)
     if gaps:
-        return False, "; ".join(gaps), report
+        return False, "; ".join(gaps) + f"\nFailing tests and their first error line:\n{failing}", report
     return True, f"{len(passed)} tests pass, all ACs covered", report
 
 
 # ---------- G6: review evidence ----------
 
+def _norm_command(cmd: str) -> str:
+    """Compare commands without a leading `cd /ws/pr &&` and with spaces collapsed."""
+    cmd = re.sub(r"^\s*cd\s+/ws/pr\s*(&&|;)\s*", "", cmd.strip())
+    return re.sub(r"\s+", " ", cmd)
+
+
 def g6(review: dict, repo: Path, commands_run: list[str], new_failures: list[str]) -> tuple[bool, str]:
     problems = []
+    ran = [_norm_command(c) for c in commands_run]
 
     def check(ev: dict, where: str):
         if "file" in ev:
-            f = repo / ev["file"]
+            rel = ev["file"].removeprefix("/ws/pr/").removeprefix("./")   # the prompt asks for relative paths
+            f = repo / rel
             try:
                 n_lines = len(safe_read(f).splitlines()) if f.is_file() else 0
             except PermissionError:
                 n_lines = 0
             if not (1 <= ev["line"] <= n_lines):
                 problems.append(f"{where}: {ev['file']}:{ev['line']} does not exist")
-        elif not any(ev["command"].strip() in c for c in commands_run):
+        elif not any(_norm_command(ev["command"]) in c for c in ran):
             problems.append(f"{where}: command not run by the reviewer: {ev['command'][:80]}")
 
     for i, ev in enumerate(review["approval_evidence"]):
@@ -317,6 +454,7 @@ def g6(review: dict, repo: Path, commands_run: list[str], new_failures: list[str
             problems.append("approval does not cite a test command the reviewer ran")
         if new_failures:
             problems.append(f"approval while the job's test step has new failures: {new_failures[:10]}")
-        if review["findings"] and any(f["severity"] == "blocker" for f in review["findings"]):
-            problems.append("approval with a blocker finding")
+        serious = [f["id"] for f in review["findings"] if f["severity"] in ("major", "blocker")]
+        if serious:
+            problems.append(f"approval with major or blocker findings {serious}; use changes_requested")
     return (not problems), "; ".join(problems) or "evidence valid"
