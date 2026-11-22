@@ -266,7 +266,7 @@ def hide_managed_tests(state: dict) -> None:
             p.unlink()
 
 
-def stage3(state: dict, agent, note: str) -> tuple[bool, str]:
+def stage3(state: dict, agent, note: str, existing_tests: dict[str, str]) -> tuple[bool, str]:
     fresh_out()
     drop_tester_workspaces()
     hide_managed_tests(state)
@@ -282,7 +282,7 @@ def stage3(state: dict, agent, note: str) -> tuple[bool, str]:
     record(state, "stage3", result)
     check_exit("3", result)
     save_summary(3)
-    return gates.g3(WS / "work", state["branch_head"], design, set(state["tester_tests"]))
+    return gates.g3(WS / "work", state["branch_head"], design, set(state["tester_tests"]), existing_tests)
 
 
 def collect_tests(ws: Path, base: str, existing: set[str], only: set[str] | None = None,
@@ -484,7 +484,7 @@ def run(state: dict) -> None:
                 reset_work(state)
             design_agent = stage2(state, note)
         elif stage == 3:
-            ok, msg = stage3(state, design_agent, note)
+            ok, msg = stage3(state, design_agent, note, baseline["test_hashes"])
             design_agent = None
             if not ok:
                 if r3_g3 >= STAGE3_RETRIES:
