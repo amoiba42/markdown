@@ -8,6 +8,8 @@
 """
 
 import json
+import random
+import re
 import time
 from pathlib import Path
 
@@ -23,7 +25,8 @@ from config import MODELS, RUN_TOKEN_CAP, STAGE_TOKEN_CAP, STEP_LIMIT, WALL_SECO
 
 RUN_TOKENS = {"total": 0}
 TRANSIENT = (litellm.exceptions.RateLimitError, litellm.exceptions.ServiceUnavailableError)
-BACKOFF = (15, 30, 60)          # seconds between attempts; free tier allows about 5 requests per minute
+RETRIES = 4                   # retries per call on the same model before the fallback
+MAX_WAIT = 90                 # seconds; longest single wait
 FINISH = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 
 SYSTEM_FOOTER = f"""
@@ -41,13 +44,29 @@ def _usage(response: dict) -> int:
     return int(u.get("prompt_tokens") or 0) + int(u.get("completion_tokens") or 0)
 
 
+def _wait_for(e: Exception, attempt: int) -> float | None:
+    """Seconds to wait before retrying `e`, or None when waiting cannot help (daily quota exhausted)."""
+    text = str(e)
+    if re.search(r"PerDay|per day", text):
+        return None
+    m = re.search(r"retry in ([\d.]+)(ms|s)\b", text) or re.search(r'"retryDelay":\s*"([\d.]+)(s)"', text)
+    base = float(m.group(1)) / (1000 if m.group(2) == "ms" else 1) if m else 0.0
+    base = max(base, 5.0 * 2 ** attempt)                    # server hint, but at least exponential backoff
+    return min(MAX_WAIT, base) * random.uniform(1.0, 1.5)   # jitter so parallel runs drift apart
+
+
 def _retry(call):
-    """Run call(); on a transient error wait and retry, up to len(BACKOFF) retries, then re-raise."""
-    for wait in BACKOFF:
+    """Run call(); on a transient error wait (server hint, exponential, jitter) and retry. Re-raise at once on a
+    daily quota, or after RETRIES retries, so the caller can switch to the fallback model."""
+    for attempt in range(RETRIES):
         try:
             return call()
         except TRANSIENT as e:
-            log(f"{type(e).__name__}; retrying in {wait}s")
+            wait = _wait_for(e, attempt)
+            if wait is None:
+                log(f"{type(e).__name__}: daily quota; not retrying")
+                raise
+            log(f"{type(e).__name__}; retrying in {wait:.0f}s")
             time.sleep(wait)
     return call()
 
