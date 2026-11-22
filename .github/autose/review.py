@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -49,6 +50,19 @@ def render(review: dict) -> str:
     return "\n".join(lines)
 
 
+def hide_other_refs(repo: Path) -> None:
+    """The reviewer sees the repository at the PR's commit only. A full checkout also holds every other branch
+    (other PRs, the base branch with tooling and experiment notes); drop those refs and their objects."""
+    git = ["git", "-C", str(repo)]
+    head = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    refs = subprocess.run(git + ["for-each-ref", "--format=%(refname)"], capture_output=True, text=True).stdout.split()
+    for ref in refs:
+        subprocess.run(git + ["update-ref", "-d", ref], capture_output=True)
+    subprocess.run(git + ["checkout", "-q", "--detach", head], capture_output=True)
+    subprocess.run(git + ["reflog", "expire", "--expire=now", "--all"], capture_output=True)
+    subprocess.run(git + ["gc", "-q", "--prune=now"], capture_output=True)
+
+
 def main() -> None:
     ART.mkdir(parents=True, exist_ok=True)
     try:
@@ -60,8 +74,10 @@ def main() -> None:
         if pr_ws.exists():
             shutil.rmtree(pr_ws)
         shutil.copytree(PR_CHECKOUT, pr_ws, symlinks=True)
-        sandbox.start()
-        sandbox.lockdown()
+        hide_other_refs(pr_ws)
+        if os.environ.get("AUTOSE_SANDBOX_READY") != "1":
+            sandbox.start()
+            sandbox.lockdown()
 
         # 1. Tests run first, in the sandbox, with no secrets (ADR-002).
         _, passed, failed, out = gates.run_pytest(pr_ws, "review")
@@ -76,6 +92,10 @@ def main() -> None:
         task = Template((PROMPTS / "reviewer.md").read_text()).safe_substitute(
             issue=f"<{tag}>\nTITLE: {issue['title']}\n\n{issue['body']}\n</{tag}>", tag=tag,
             diff=f"<{tag}>\n{diff[:60000]}\n</{tag}>", tests=test_summary)
+        notes = os.environ.get("AUTOSE_REVIEWER_NOTES")       # decision experiment D8, variant with reasoning
+        if notes and Path(notes).is_file():
+            task += (f"\n\n## Notes from the implementer (design and attempt summaries)\n<{tag}>\n"
+                     f"{Path(notes).read_text()[:20000]}\n</{tag}>\n")
         agent = make_agent("reviewer", "reviewer", (PROMPTS / "reviewer_system.md").read_text(), "/ws/pr",
                       ART / "review_trajectory.json")
         result = agent.start(task)
@@ -113,6 +133,10 @@ def main() -> None:
         # 4. Publish: PR comment + label (GITHUB_TOKEN, pull-requests: write).
         body = render(review)
         (ART / "review.md").write_text(body)
+        if os.environ.get("AUTOSE_REVIEW_PUBLISH", "1") == "0":   # decision experiments post nothing
+            set_output("verdict", review["verdict"])
+            set_output("status", "ready")
+            return
         gh_api(f"/repos/{REPO}/issues/{PR}/comments", method="POST", fields={"body": body})
         other = LABELS["approve" if review["verdict"] == "changes_requested" else "changes_requested"]
         try:

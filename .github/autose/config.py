@@ -43,6 +43,12 @@ MODELS = {
                      "openrouter/nvidia/nemotron-3.5-super-vl:free", "openrouter/inclusionai/ling-3.2-flash:free",
                      G + "gemini-3.5-flash-lite"),
 }
+# Decision experiments pin one model per role (no fallback chain), e.g. AUTOSE_PIN_MODEL_REVIEWER=gemini/...
+for _role in list(MODELS):
+    _pin = os.environ.get(f"AUTOSE_PIN_MODEL_{_role.upper()}")
+    if _pin:
+        MODELS[_role] = (_pin,)
+
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
 VARIANT = os.environ.get("AUTOSE_VARIANT", "A")
 OPENROUTER_QWEN = os.environ.get("AUTOSE_QWEN_MODEL", "openrouter/qwen/qwen3-coder:free")  # TODO(me): pin ID

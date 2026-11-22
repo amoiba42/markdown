@@ -1,0 +1,87 @@
+# Decision experiments D1 and D8 (experiment/variants.md). Manual dispatch only; posts nothing; read-only token.
+name: autose-experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:       { description: "d1 (Stage 1 only) or d8 (review only)", required: true, type: choice, options: [d1, d8] }
+      issue:      { description: "Issue number the subject addresses", required: true, type: string }
+      variant:    { description: "d1: skill | bare;  d8: blind | notes", required: true, type: string }
+      subject:    { description: "d8: notes file name (s1..s5, pr7, pr8, pr9); d1: any label", required: true, type: string }
+      ref:        { description: "d8: branch to review (e.g. seeded/s1, autose/issue-5)", required: false, type: string, default: "" }
+      rep:        { description: "Repetition number", required: false, type: string, default: "1" }
+      req_model:      { description: "Pinned requirements model", required: false, type: string, default: "gemini/gemini-3.5-flash-lite" }
+      judge_model:    { description: "Pinned judge model", required: false, type: string, default: "gemini/gemini-3.6-flash" }
+      reviewer_model: { description: "Pinned reviewer model", required: false, type: string, default: "gemini/gemini-3.5-flash-lite" }
+
+permissions: {}
+
+concurrency:
+  group: autose-exp-${{ inputs.mode }}-${{ inputs.subject }}-${{ inputs.variant }}-${{ inputs.rep }}
+  cancel-in-progress: false
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    env:
+      ISSUE_NUMBER: ${{ inputs.issue }}
+      EXP_MODE: ${{ inputs.mode }}
+      EXP_VARIANT: ${{ inputs.variant }}
+      EXP_SUBJECT: ${{ inputs.subject }}
+      EXP_REP: ${{ inputs.rep }}
+      AUTOSE_TOOL: tool/.github/autose
+      AUTOSE_BASE_REF: master
+      AUTOSE_PIN_MODEL_REQUIREMENTS: ${{ inputs.req_model }}
+      AUTOSE_PIN_MODEL_JUDGE: ${{ inputs.judge_model }}
+      AUTOSE_PIN_MODEL_REVIEWER: ${{ inputs.reviewer_model }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: master, path: tool, persist-credentials: false }
+      - uses: actions/checkout@v4
+        with: { ref: master, path: work, persist-credentials: false }
+      - name: Implementer notes for D8 (separate branch, outside the sandbox)
+        if: inputs.mode == 'd8'
+        uses: actions/checkout@v4
+        with: { ref: experiment-data, path: expdata, persist-credentials: false }
+      - name: Pull request branch for D8
+        if: inputs.mode == 'd8'
+        uses: actions/checkout@v4
+        with: { ref: "${{ inputs.ref }}", path: pr, persist-credentials: false, fetch-depth: 0 }
+      - name: Base commit of the branch
+        if: inputs.mode == 'd8'
+        run: echo "AUTOSE_BASE_SHA=$(git -C pr merge-base origin/master HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -r "$AUTOSE_TOOL/requirements.txt"
+      - name: Experiment
+        working-directory: ${{ env.AUTOSE_TOOL }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AUTOSE_CHECKOUT: ${{ github.workspace }}/work
+          AUTOSE_PR_CHECKOUT: ${{ github.workspace }}/pr
+          AUTOSE_REVIEW_INPUT: ${{ github.workspace }}/review_input
+          EXP_NOTES_DIR: ${{ github.workspace }}/expdata/notes
+          PR_NUMBER: "0"
+          MSWEA_COST_TRACKING: ignore_errors
+        run: python experiment.py
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autose-exp-${{ inputs.mode }}-${{ inputs.subject }}-${{ inputs.variant }}-r${{ inputs.rep }}
+          path: ${{ runner.temp }}/autose/art
+          include-hidden-files: true
+          if-no-files-found: warn

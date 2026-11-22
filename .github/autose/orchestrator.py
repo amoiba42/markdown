@@ -173,7 +173,10 @@ def stage1(state: dict, note: str) -> None:
     fresh_out()
     if note and (ART / "spec.json").exists():      # a re-run keeps ids of criteria nobody questioned
         note += f"\n\n### Your previous spec.json\n```json\n{read(ART / 'spec.json')}\n```\n"
-    system = read(PROMPTS / "a1_skill.md") + "\n\n" + prompt("requirements_system")
+    if os.environ.get("AUTOSE_A1_SKILL", "on") == "off":       # decision experiment D1, variant without the skill
+        system = read(PROMPTS / "requirements_bare_system.md")
+    else:
+        system = read(PROMPTS / "a1_skill.md") + "\n\n" + prompt("requirements_system")
     task = prompt("requirements", issue=untrusted(state), number=str(ISSUE), note=note)
     agent = make_agent("requirements", "requirements", system, "/ws/base", ART / "traj" / "stage1.json")
     result = agent.start(task)

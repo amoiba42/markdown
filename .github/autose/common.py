@@ -134,7 +134,17 @@ def short_error(text: str, limit: int = 400) -> str:
     return line[:limit] or "no details"
 
 
+def quiet() -> bool:
+    """Decision experiments (experiment.py) must not post on issues or pull requests."""
+    if os.environ.get("AUTOSE_NO_COMMENTS") == "1":
+        log("AUTOSE_NO_COMMENTS=1: not posting")
+        return True
+    return False
+
+
 def comment(body: str) -> None:
+    if quiet():
+        return
     gh_api(f"/repos/{REPO}/issues/{ISSUE}/comments", method="POST", fields={"body": redact(body)})
 
 
@@ -151,6 +161,8 @@ def _marked(mark: str) -> list[dict]:
 
 def upsert_comment(mark: str, body: str) -> None:
     """Keep one comment per kind on the issue: edit the one that starts with `mark`, else create it."""
+    if quiet():
+        return
     body = redact(f"{mark}\n{body}")
     mine = _marked(mark)
     if mine:
@@ -161,6 +173,8 @@ def upsert_comment(mark: str, body: str) -> None:
 
 def delete_comment(mark: str) -> None:
     """Remove the comment of one kind, e.g. a stop comment once a later run went past that stop."""
+    if quiet():
+        return
     try:
         for c in _marked(mark):
             gh_api(f"/repos/{REPO}/issues/comments/{c['id']}", method="DELETE")
