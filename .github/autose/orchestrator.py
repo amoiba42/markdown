@@ -18,7 +18,7 @@ import sandbox
 import schemas
 from agents import RUN_TOKENS, Agent, llm_json
 from common import (ART, ISSUE, REPO, RUN_ID, comment, download_latest_bundle, gh_api, load_state, log,
-                    new_state, read, save_state, set_output, update_mirror, write_explanation)
+                    new_state, read, save_state, set_output, update_mirror, upsert_comment, ASSUMPTIONS_MARK, write_explanation)
 from config import PROMPTS, STAGE2_REDOS, STAGE3_RETRIES, WS
 
 EVENT = os.environ.get("EVENT_NAME", "")
@@ -153,8 +153,8 @@ def stage1(state: dict, note: str) -> None:
     if not ok:
         raise Stop("1", "G1 testability judge (LLM verdict) failed", msg)
     if spec["assumptions"]:
-        comment("**AutoSE: assumptions recorded for this issue** (the issue was not specific enough):\n\n"
-                + "\n".join(f"- {a}" for a in spec["assumptions"]))
+        upsert_comment(ASSUMPTIONS_MARK, "**AutoSE: assumptions recorded for this issue** (the issue was not specific enough):\n\n"
+                       + "\n".join(f"- {a}" for a in spec["assumptions"]))
     (ART / "spec.md").write_text(render_spec(spec))
 
 
