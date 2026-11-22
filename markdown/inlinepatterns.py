@@ -87,6 +87,7 @@ def build_inlinepatterns(md: Markdown, **kwargs: Any) -> util.Registry[InlinePro
         ShortImageReferenceInlineProcessor(IMAGE_REFERENCE_RE, md), 'short_image_ref', 125
     )
     inlinePatterns.register(AutolinkInlineProcessor(AUTOLINK_RE, md), 'autolink', 120)
+    inlinePatterns.register(OpaqueUriInlineProcessor(OPAQUE_URI_RE, md), 'opaque_uri', 105)
     inlinePatterns.register(AutomailInlineProcessor(AUTOMAIL_RE, md), 'automail', 110)
     inlinePatterns.register(SubstituteTagInlineProcessor(LINE_BREAK_RE, 'br'), 'linebreak', 100)
     inlinePatterns.register(HtmlInlineProcessor(HTML_RE, md), 'html', 90)
@@ -121,7 +122,8 @@ IMAGE_REFERENCE_RE = IMAGE_LINK_RE
 """ Match start of image reference (`![alt text][2]`). """
 
 AUTOLINK_RE = r'<([A-Za-z][A-Za-z0-9+.-]*://[^<>]*)>'
-""" Match an automatic link (`<http://www.example.com>`). """
+OPAQUE_URI_RE = r'<((?:tel|sms|callto|facetime|skype):[^<>]*)>'
+""" Match an opaque URI link (`<tel:+123>`). """
 
 AUTOMAIL_RE = r'<([^<> !]+@[^@<> ]+)>'
 """ Match an automatic email link (`<me@example.com>`). """
@@ -1394,6 +1396,16 @@ class ShortImageReferenceInlineProcessor(ImageReferenceInlineProcessor):
 
         return text.lower(), index, True
 
+
+
+class OpaqueUriInlineProcessor(InlineProcessor):
+    """ Return a link Element given an opaque URI scheme (`<tel:+123>`). """
+    def handleMatch(self, m: re.Match[str], data: str) -> tuple[etree.Element, int, int]:
+        """ Return an `a` [`Element`][xml.etree.ElementTree.Element] of `group(1)`. """
+        el = etree.Element("a")
+        el.set('href', self.unescape(m.group(1)))
+        el.text = util.AtomicString(m.group(1))
+        return el, m.start(0), m.end(0)
 
 class AutolinkInlineProcessor(InlineProcessor):
     """ Return a link Element given an auto-link (`<http://example/com>`). """
