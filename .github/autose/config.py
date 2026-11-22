@@ -41,7 +41,7 @@ MODELS = {
     # Reviewer fallbacks: only models no code-writing role uses (flash-lite models are the requirements agent's).
     "reviewer":     (OPUS, G + "gemini-4-hydrogen", G + "gemma-4-31b-it", REVIEW_FALLBACK,
                      "openrouter/nvidia/nemotron-3.5-super-vl:free", "openrouter/inclusionai/ling-3.2-flash:free",
-                     G + "gemini-3.5-flash-lite"),
+                     G + "gemini-3.5-flash-lite", G + "gemini-3.1-flash-lite"),
 }
 # Experiment 1, variant B (experiment/variants.md): reviewer and judge on Qwen via OpenRouter.
 VARIANT = os.environ.get("AUTOSE_VARIANT", "A")
