@@ -139,6 +139,8 @@ def provider_dead(e: Exception) -> bool:
 
 def switchable(e: Exception) -> bool:
     """Errors after which the next model in the chain should be tried."""
+    if isinstance(e, litellm.exceptions.BadRequestError) and "provider returned error" in str(e).lower():
+        return True                       # OpenRouter: the upstream provider failed this model, try the next one
     return isinstance(e, TRANSIENT) or isinstance(e, litellm.exceptions.NotFoundError) or provider_dead(e)
 
 
