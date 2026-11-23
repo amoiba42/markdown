@@ -13,6 +13,11 @@ on:
         description: Issue number
         required: true
         type: string
+      restart_from:
+        description: Optional stage (1-4) to restart from, e.g. 1 after the spec itself turned out wrong
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -83,6 +88,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           AUTOSE_CHECKOUT: ${{ github.workspace }}/work
           MSWEA_COST_TRACKING: ignore_errors
+          AUTOSE_RESTART_FROM: ${{ inputs.restart_from }}
         run: python orchestrator.py
       - name: Upload state bundle
         if: always()
