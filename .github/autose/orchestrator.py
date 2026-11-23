@@ -461,6 +461,10 @@ def run(state: dict) -> None:
     if restart in ("1", "2", "3", "4"):        # a maintainer restarts the issue from an earlier stage
         log(f"maintainer restart from Stage {restart}")
         state.update(target_stage=int(restart), last_passed=int(restart) - 1, sendback=None, stopped_at=None)
+        if int(restart) <= 4:                  # tests written for the old spec or design must not come back
+            state["tester_tests"] = []
+            if (ART / "tests").exists():
+                shutil.rmtree(ART / "tests")
     if state.get("stopped_at") == "review" and state.get("released_sha") and state.get("sendback") != "review":
         # The change was released and passed CI; only the review did not finish (e.g. no model available).
         log("previous run stopped in review: releasing the same change again for a new review")

@@ -56,6 +56,9 @@ def _wait_for(e: Exception, attempt: int) -> float | None:
     text = str(e)
     if re.search(r"PerDay|per day|per-day|_daily", text):     # Gemini and OpenRouter daily-limit wording
         return None
+    tpm = re.search(r"input_token_count.*?limit: (\d+)", text)
+    if tpm and int(tpm.group(1)) < 100_000:   # e.g. gemma's 16k tokens/minute: one agent turn is larger, never fits
+        return None
     m = re.search(r"retry in ([\d.]+)(ms|s)\b", text) or re.search(r'"retryDelay":\s*"([\d.]+)(s)"', text)
     base = float(m.group(1)) / (1000 if m.group(2) == "ms" else 1) if m else 0.0
     base = max(base, 5.0 * 2 ** attempt)                    # server hint, but at least exponential backoff

@@ -23,6 +23,8 @@ Before writing criteria, search the existing tests (`grep -rn` under /ws/base/te
 touches. Existing tests are the project's contract: a criterion must not contradict one unless the issue
 explicitly asks for that exact change. If the issue's examples are narrower than a general rule (for example
 only headings with emphasis or code), keep the criteria that narrow and list the general case in out_of_scope.
+When an existing test pins behaviour close to the change, add one criterion stating that this behaviour stays as
+it is, with the test's own input and expected output, and do not write an assumption that widens the scope.
 
 Only if the skill's rejection rule (Section 7) applies, write **/ws/out/rejected.json** instead of spec.json:
 `{"reason": "...", "questions": ["..."]}` (1 to 5 questions).

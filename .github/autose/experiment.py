@@ -70,7 +70,6 @@ def d1() -> None:
 
 
 def d8() -> None:
-    pr_checkout = Path(os.environ["AUTOSE_PR_CHECKOUT"])
     inp = Path(os.environ["AUTOSE_REVIEW_INPUT"])
     inp.mkdir(parents=True, exist_ok=True)
     issue = gh_api(f"/repos/{REPO}/issues/{ISSUE}")
