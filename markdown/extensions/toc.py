@@ -38,12 +38,18 @@ if TYPE_CHECKING:  # pragma: no cover
 
 def slugify(value: str, separator: str, unicode: bool = False) -> str:
     """ Slugify a string, to make it URL friendly. """
+    original_value = value
     if not unicode:
         # Replace Extended Latin characters with ASCII, i.e. `žlutý` => `zluty`
         value = unicodedata.normalize('NFKD', value)
         value = value.encode('ascii', 'ignore').decode('ascii')
     value = re.sub(r'[^\w\s-]', '', value).strip().lower()
-    return re.sub(r'[{}\s]+'.format(separator), separator, value)
+    value = re.sub(r'[{}\s]+'.format(separator), separator, value)
+    # If the result is empty (e.g., for non-Latin scripts like Chinese),
+    # fallback to Unicode-friendly slugification
+    if not value and not unicode:
+        return slugify_unicode(original_value, separator)
+    return value
 
 
 def slugify_unicode(value: str, separator: str) -> str:
