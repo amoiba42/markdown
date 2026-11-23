@@ -88,6 +88,7 @@ def build_inlinepatterns(md: Markdown, **kwargs: Any) -> util.Registry[InlinePro
     )
     inlinePatterns.register(AutolinkInlineProcessor(AUTOLINK_RE, md), 'autolink', 120)
     inlinePatterns.register(AutomailInlineProcessor(AUTOMAIL_RE, md), 'automail', 110)
+    inlinePatterns.register(AutolinkInlineProcessor(OPAQUE_LINK_RE, md), 'opaquelink', 105)
     inlinePatterns.register(SubstituteTagInlineProcessor(LINE_BREAK_RE, 'br'), 'linebreak', 100)
     inlinePatterns.register(HtmlInlineProcessor(HTML_RE, md), 'html', 90)
     inlinePatterns.register(HtmlInlineProcessor(ENTITY_RE, md), 'entity', 80)
@@ -125,6 +126,9 @@ AUTOLINK_RE = r'<([A-Za-z][A-Za-z0-9+.-]*://[^<>]*)>'
 
 AUTOMAIL_RE = r'<([^<> !]+@[^@<> ]+)>'
 """ Match an automatic email link (`<me@example.com>`). """
+
+OPAQUE_LINK_RE = r'<((?:tel|sms|callto|facetime|skype):[^<> ]+)>'
+""" Match an opaque-scheme link (`<tel:+123>`). """
 
 HTML_RE = (
     # Tag
