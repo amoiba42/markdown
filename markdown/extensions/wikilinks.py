@@ -82,9 +82,19 @@ class WikiLinksInlineProcessor(InlineProcessor):
             a.set('href', url)
             if html_class:
                 a.set('class', html_class)
-        else:
-            a = ''
-        return a, m.start(0), m.end(0)
+            return a, m.start(0), m.end(0)
+        
+        start, end = m.span(0)
+        
+        # Check if it is "plain text"
+        is_plain_text = False
+        if re.search(r'\w\s*$', data[:start]) and re.search(r'^\s*\w', data[end:]):
+            is_plain_text = True
+            
+        if is_plain_text:
+            return "", start, end
+        
+        return m.group(0), start, end
 
     def _getMeta(self) -> tuple[str, str, str]:
         """ Return meta data or `config` data. """
